@@ -76,7 +76,7 @@
 &flexcomm2 {
 	compatible = "nxp,lpc-i2c";
 	status = "okay";
-	clock-frequency = <400000>;  /* Fast Mode 400 kHz */
+	clock-frequency = <100000>;  /* Standard Mode 100 kHz */
 	pinctrl-0 = <&pinmux_flexcomm2_i2c>;
 	pinctrl-names = "default";
 	#address-cells = <1>;
