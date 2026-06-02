@@ -11,6 +11,9 @@
 
 #include <fsl_clock.h>
 
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(i2c_bus, LOG_LEVEL_INF);
+
 #if   (APP_I2C_BUS_INSTANCE == 0u)
   #define I2C_NODE DT_NODELABEL(flexcomm0)
 #elif (APP_I2C_BUS_INSTANCE == 1u)
@@ -111,7 +114,18 @@ int i2c_bus_probe(uint8_t addr_7b)
     };
     k_mutex_lock(&s_lock, K_FOREVER);
     i2c_bus_select_once();
+    uint32_t t0 = k_uptime_get_32();
     rc = i2c_transfer(i2c_dev, &msg, 1, addr_7b);
+    uint32_t dt = k_uptime_get_32() - t0;
+    /* 진단: rc·소요시간으로 "not found" 원인 구분. dt 가 핵심 지표:
+     *  rc=0,  dt~0ms       → ACK (센서 검출)
+     *  rc=-5, dt~0ms       → 정상 NAK (그 주소에 장치 없음 / 배선·풀업·전원)
+     *  dt~100ms [TIMEOUT]  → 엔진 미래치 (PSELID 수정이 이번 부팅에 안 먹음)
+     * CFG 의 MSTEN 은 드라이버가 전송 시에만 켜므로 평소 0 = 정상(고장 지표 아님). */
+    volatile uint32_t *fc2 = (volatile uint32_t *)0x40108000u;
+    LOG_INF("probe 0x%02x: rc=%d dt=%ums CFG=0x%03x%s",
+            addr_7b, rc, dt, fc2[0],
+            (rc == 0) ? "" : (dt >= 90u ? " [TIMEOUT/no-latch]" : " [NAK]"));
     k_mutex_unlock(&s_lock);
     return (rc == 0) ? 0 : -ENODEV;
 }
