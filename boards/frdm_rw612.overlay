@@ -81,6 +81,10 @@
 	pinctrl-names = "default";
 	#address-cells = <1>;
 	#size-cells = <0>;
+	/* I2C IRQ 우선순위 0(최고)→3. RW612 무선 코프로세서가 상위 우선순위를
+	 * 쓰므로, I2C 완료 ISR이 라디오 임계구간을 선점하지 않도록 방어적으로 낮춘다.
+	 * (IRQ 16 = FlexComm2. 멈춤의 직접 원인은 아니었지만 상시 유지 권장) */
+	interrupts = <16 3>;
 };
 
 /* SCTimer: IR TX 캐리어용 SCT_OUT5(GPIO27) 사용

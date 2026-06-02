@@ -90,34 +90,34 @@ static void amg_task(void *p1, void *p2, void *p3)
     s_probing = false;
     k_work_cancel_delayable(&s_watchdog_dwork);
 
-    if (last_rc == AMG8833_OK) {
-        LOG_INF("AMG8833 ready (addr=0x%02X)", s_addr);
-    } else {
-        LOG_WRN("AMG8833 not found (addr=0x%02X rc=%d)", s_addr, last_rc);
+    if (last_rc != AMG8833_OK) {
+        /* 미응답/미연결 센서를 계속 폴링하면 실패 I2C 전송(NAK + 드라이버의
+         * I2C_MasterTransferAbort)이 WiFi 연결 임계구간과 겹쳐 시스템 전체가
+         * 멈춘다. 못 찾으면 태스크를 종료해 추가 I2C 트래픽을 만들지 않는다.
+         * (센서 연결 후에는 재부팅/재시작으로 다시 탐지) */
+        LOG_WRN("AMG8833 not found (addr=0x%02X rc=%d) — stopping (no I2C retry)",
+                s_addr, last_rc);
+        s_running = false;
+        s_tid     = NULL;
+        return;
     }
+    LOG_INF("AMG8833 ready (addr=0x%02X)", s_addr);
 
     while (s_running) {
         amg_sample_t s;
         memset(&s, 0, sizeof(s));
 
-        if (last_rc != AMG8833_OK) {
-            last_rc = amg8833_init(&s_dev, s_addr);
-        }
-
-        if (last_rc == AMG8833_OK) {
-            int rc = amg8833_read_frame(&s_dev);
-            if (rc == AMG8833_OK) {
-                memcpy(s.pixels_q2, s_dev.pixels_q2, sizeof(s.pixels_q2));
-                compute_stats(&s);
-                (void)amg8833_read_thermistor(&s_dev);
-                s.thermistor_q4 = s_dev.thermistor_q4;
-                s.err           = 0;
-            } else {
-                s.err   = (int8_t)rc;
-                last_rc = rc;
-            }
+        /* 센서가 한번 확인된 뒤에는 read 만 한다. read 실패해도 재init 하지
+         * 않는다(실패 I2C 폭주 방지). */
+        int rc = amg8833_read_frame(&s_dev);
+        if (rc == AMG8833_OK) {
+            memcpy(s.pixels_q2, s_dev.pixels_q2, sizeof(s.pixels_q2));
+            compute_stats(&s);
+            (void)amg8833_read_thermistor(&s_dev);
+            s.thermistor_q4 = s_dev.thermistor_q4;
+            s.err           = 0;
         } else {
-            s.err = (int8_t)last_rc;
+            s.err = (int8_t)rc;
         }
 
         s.seq          = ++seq;
