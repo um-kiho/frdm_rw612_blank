@@ -395,11 +395,15 @@ void app_main_task(void *arg)
 	} else {
 		LOG_INF("BH1750 lux task created (I2C probe pending)");
 	}
-//	if (amg_task_start(0x69, 100, NULL, NULL) != 0) {
-//		LOG_WRN("amg_task_start failed");
-//	} else {
-//		LOG_INF("AMG8833 task created (I2C probe pending)");
-//	}
+	/* [임시 격리 테스트] amg_task 비활성 — WiFi 연결 시 멈춤 원인이 amg인지 확인.
+	 * amg 없이 WiFi+TCP 정상이면 amg I2C↔라디오 충돌 의심. 확인 후 복원. */
+#if 0
+	if (amg_task_start(0x69, 100, NULL, NULL) != 0) {
+		LOG_WRN("amg_task_start failed");
+	} else {
+		LOG_INF("AMG8833 task created (I2C probe pending)");
+	}
+#endif
 #else
 	LOG_INF("Sensors disabled (CONFIG_APP_SENSORS_ENABLE not set)");
 	printf("APP: sensors disabled — enable CONFIG_APP_SENSORS_ENABLE when connected\n");
@@ -446,7 +450,7 @@ void app_main_task(void *arg)
 
 		/* 30초마다 전체 스레드 스택 사용량 출력 */
 		if ((blink_count % 30u) == 0u) {
-		//	app_main_dump_stacks();
+			app_main_dump_stacks();
 		}
 
 		k_msleep(APP_MAIN_PERIOD_MS);

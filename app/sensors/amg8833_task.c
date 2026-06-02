@@ -12,7 +12,7 @@
 LOG_MODULE_REGISTER(amg_task, LOG_LEVEL_INF);
 
 #ifndef AMG_TASK_STACK
-#define AMG_TASK_STACK          2048
+#define AMG_TASK_STACK          4096   /* read_frame()이 128B 프레임 버퍼를 스택에 잡음 */
 #endif
 #ifndef AMG_TASK_PRIO
 #define AMG_TASK_PRIO           2
@@ -40,10 +40,11 @@ static void watchdog_fn(struct k_work *w)
 {
     ARG_UNUSED(w);
     if (s_probing && s_tid != NULL) {
-        LOG_WRN("AMG8833 I2C timeout — no hardware, aborting task");
-        k_thread_abort(s_tid);
+        /* I2C 가 더 이상 hang 하지 않으므로(미연결=즉시 NAK) 이 워치독은 보호용
+         * 잔재다. k_thread_abort 는 I2C 락을 영구 잠가 전체 데드락을 유발하므로
+         * 절대 쓰지 않는다. s_running 만 내려 태스크가 다음 루프에서 정상 종료. */
+        LOG_WRN("AMG8833 I2C timeout — stopping task (no abort)");
         s_running = false;
-        s_tid     = NULL;
     }
 }
 
@@ -125,6 +126,13 @@ static void amg_task(void *p1, void *p2, void *p3)
         publish(&s);
 
         next_time += s_period_ms;
+        uint32_t now = k_uptime_get_32();
+        if ((int32_t)(next_time - now) < 1) {
+            /* 처리시간이 주기를 초과해 일정이 밀리면 절대시각 sleep 이 0/음수가
+             * 되어 yield 없이 tight-loop → CPU 독점(네트워크·로그 starvation,
+             * "다운"처럼 보임). 일정을 리셋해 항상 최소 한 주기를 sleep 한다. */
+            next_time = now + s_period_ms;
+        }
         k_sleep(K_TIMEOUT_ABS_MS(next_time));
     }
 }

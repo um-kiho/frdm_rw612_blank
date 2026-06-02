@@ -45,11 +45,10 @@ static void watchdog_fn(struct k_work *w)
 {
     ARG_UNUSED(w);
     if (s_probing && s_tid != NULL) {
-        LOG_WRN("BH1750 I2C timeout — no hardware, aborting task");
-        k_thread_abort(s_tid);
-        i2c_bus_force_unlock();   /* abort 시 뮤텍스가 잠긴 채 남지 않도록 재초기화 */
+        /* I2C 가 더 이상 hang 하지 않으므로 이 워치독은 잔재. k_thread_abort 는
+         * I2C 락을 영구 잠가 전체 데드락을 유발하므로 절대 쓰지 않는다. */
+        LOG_WRN("BH1750 I2C timeout — stopping task (no abort)");
         s_running = false;
-        s_tid     = NULL;
     }
 }
 
@@ -67,10 +66,10 @@ static int hw_init(void)
      * - 0x48 found(빠름): 버스/페리페럴 정상 → 0x5C/0x23 미검출은 센서 미연결/배선 문제
      * - 0x48 100ms 타임아웃/hang: 버스가 처음부터 stuck (SDA/SCL hold, 쇼트, 배선)
      * 정상 장치를 첫 트랜잭션으로 보내 버스를 깨끗한 상태로 만드는 효과도 있다. */
-    LOG_INF("probe 0x48 (onboard P3T1755)...");
-    bool found_ref = (i2c_bus_probe(0x48) == 0);
-    LOG_INF("probe 0x48: %s", found_ref ? "found (bus OK)" : "NOT found (bus stuck?)");
-    k_sleep(K_MSEC(LUX_PROBE_INTER_MS));
+    //LOG_INF("probe 0x48 (onboard P3T1755)...");
+    //bool found_ref = (i2c_bus_probe(0x48) == 0);
+    //LOG_INF("probe 0x48: %s", found_ref ? "found (bus OK)" : "NOT found (bus stuck?)");
+    //k_sleep(K_MSEC(LUX_PROBE_INTER_MS));
 
     /* 실제 I2C 통신 전에 장치 존재 여부 확인 (타임아웃 내 빠른 실패) */
     LOG_INF("probe 0x%02x...", BH1750_ADDR_HIGH);
@@ -155,6 +154,12 @@ static void lux_task(void *p1, void *p2, void *p3)
         publish(&s);
 
         next_time += s_period_ms;
+        uint32_t now = k_uptime_get_32();
+        if ((int32_t)(next_time - now) < 1) {
+            /* 일정이 밀리면 절대시각 sleep 이 0/음수가 되어 yield 없이 tight-loop
+             * → CPU 독점. 일정을 리셋해 항상 최소 한 주기를 sleep 한다. */
+            next_time = now + s_period_ms;
+        }
         k_sleep(K_TIMEOUT_ABS_MS(next_time));
     }
 }

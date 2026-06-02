@@ -69,13 +69,25 @@
 	dma-names = "rx", "tx";
 };
 
+/* FC1 I2S 제거 — 오디오 재생은 ESP32-A1S 담당, RW612는 ES8388 I2C 제어만 수행 */
+
+/* Sensor & Audio Codec I2C: FC2 — GPIO16(SDA), GPIO17(SCL)
+ * 연결 디바이스: BH1750(0x23), AMG8833(0x69), ES8388(0x10) */
+&flexcomm2 {
+	compatible = "nxp,lpc-i2c";
+	status = "okay";
+	clock-frequency = <400000>;  /* Fast Mode 400 kHz */
+	pinctrl-0 = <&pinmux_flexcomm2_i2c>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+};
+
 /* SCTimer: IR TX 캐리어용 SCT_OUT5(GPIO27) 사용
  * (GPIO26=SCT_OUT4는 FC3 UART TX와 충돌) */
 &sctimer {
 	pinctrl-0 = <&pinmux_ir_tx>;
 };
-
-/* FC1 I2S 제거 — 오디오 재생은 ESP32-A1S 담당, RW612는 ES8388 I2C 제어만 수행 */
 
 / {
 	aliases {
