@@ -1,0 +1,7 @@
+ExitOnError 1
+r
+h
+loadfile "C:\work\New_zCube\rw612_zephyr\frdm_rw612_blank\release\zephyr\zephyr.hex"
+qc
+
+qc

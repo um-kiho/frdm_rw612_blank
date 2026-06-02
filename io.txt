@@ -1,0 +1,455 @@
+================================================================================
+FRDM-RW612 zCube Project - IO Pin Assignment
+================================================================================
+Last Updated: 2026-05-29  (v1.3 — I2S 제거, ES8388 I2C 볼륨 제어만 유지)
+Board: FRDM-RW612 (NXP RW612, ARM Cortex-M33 @ 200MHz)
+Project: Zephyr RTOS Smart Home Controller
+================================================================================
+
+================================================================================
+QUICK PIN REFERENCE TABLE
+================================================================================
+
+PIN     PORT/BIT      PERIPHERAL    FUNCTION         MODULE/DEVICE        DIR
+---     --------      ----------    --------         -------------        ---
+GPIO2   HSGPIO0[2]    FC0 USART     TX               Radar Module         OUT
+GPIO3   HSGPIO0[3]    FC0 USART     RX               Radar Module         IN
+GPIO4   HSGPIO0[4]    GPIO          Input+BothEdgeIRQ Rotary Encoder A    IN
+GPIO5   HSGPIO0[5]    GPIO          Input+BothEdgeIRQ Rotary Encoder B    IN
+GPIO11  HSGPIO0[11]   GPIO          Input+FallingIRQ  Rotary SW (pull-up) IN
+GPIO16  HSGPIO0[16]   FC2 I2C       SDA              Sensor Bus           I/O
+GPIO17  HSGPIO0[17]   FC2 I2C       SCL              Sensor Bus           OUT
+GPIO18  HSGPIO0[18]   GPIO          Input+BothEdgeIRQ IR Receiver(TSDP341) IN
+GPIO26  HSGPIO0[26]   FC3 USART     TX               Debug Console        OUT
+GPIO27  HSGPIO0[27]   SCTIMER       OUT5 PWM         IR TX Carrier        OUT
+GPIO28  HSGPIO0[28]   FC3 USART     RX               Debug Console        IN
+GPIO44  HSGPIO1[12]   GPIO          Input+FallingIRQ INPUT0 (pull-up)     IN
+GPIO45  HSGPIO1[13]   GPIO          Input+FallingIRQ INPUT1 (pull-up)     IN
+GPIO46  HSGPIO1[14]   GPIO          Output           SK6812 LED Strip     OUT
+GPIO47  HSGPIO1[15]   GPIO          Output           APA102 DATA (opt)    OUT
+GPIO48  HSGPIO1[16]   GPIO          Output           APA102 CLK (opt)     OUT
+
+※ GPIO7/8/9 (FC1 I2S) 미사용 — 오디오 재생은 ESP32-A1S 담당
+
+
+================================================================================
+DETAILED PIN DESCRIPTIONS BY FUNCTION GROUP
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. COMMUNICATION INTERFACES (FLEXCOMM)                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+FLEXCOMM0 (FC0) - Radar Module UART
+────────────────────────────────────
+  Pin Mapping:
+    GPIO2  (HSGPIO0[2])  → FC0_TXD_SCL_MISO_WS  (UART TX)
+    GPIO3  (HSGPIO0[3])  → FC0_RXD_SDA_MOSI_DATA (UART RX)
+
+  Configuration:
+    Protocol:       USART
+    Baudrate:       115200 bps
+    Data Bits:      8
+    Parity:         None
+    Stop Bits:      1
+
+  Device Tree:
+    Node:           &flexcomm0
+    Alias:          radar-uart
+    Compatible:     "nxp,lpc-usart"
+    Pinctrl:        &pinmux_fc0_radar
+
+  DMA:            DMA0[0]=RX, DMA0[1]=TX
+  Notes:
+    - Repurposed from default mikrobus_serial
+    - DMA async API (uart_callback_set / uart_rx_enable)
+    - 더블 버퍼 512 B × 2, RX 타임아웃 2 ms, ring buffer 512 B
+
+
+FLEXCOMM1 (FC1) - 미사용 (기본값 SPI 유지)
+────────────────────────────────────────────
+  Pin Mapping:
+    GPIO7  (HSGPIO0[7])   → (미연결)
+    GPIO8  (HSGPIO0[8])   → (미연결)
+    GPIO9  (HSGPIO0[9])   → (미연결)
+
+  Status:         미사용
+  Notes:
+    - 이전에 ES8388 I2S 오디오로 사용 예정이었으나 제거됨
+    - 오디오 재생은 ESP32-A1S가 자체 I2S로 처리
+    - RW612는 ES8388 볼륨만 FC2 I2C로 제어
+
+
+FLEXCOMM2 (FC2) - Sensor & Codec I2C Bus
+─────────────────────────────────────────
+  Pin Mapping:
+    GPIO16 (HSGPIO0[16])  → FC2_CTS_SDA_SSEL0 (I2C SDA)
+    GPIO17 (HSGPIO0[17])  → FC2_RTS_SCL_SSEL1 (I2C SCL)
+
+  Configuration:
+    Protocol:       I2C (Fast Mode)
+    Speed:          400 kHz
+    Pull-ups:       Internal pull-ups enabled
+
+  Device Tree:
+    Node:           &flexcomm2
+    Alias:          arduino_i2c (standard board alias)
+    Compatible:     "nxp,lpc-i2c"
+
+  Connected Devices:
+    ┌──────────────┬─────────┬──────────────────────────────────┐
+    │ Device       │ Address │ Description                      │
+    ├──────────────┼─────────┼──────────────────────────────────┤
+    │ BH1750       │ 0x23    │ Ambient light sensor (lux)       │
+    │ AMG8833      │ 0x69    │ 8x8 thermal imaging (ADDR=HIGH)  │
+    │ ES8388       │ 0x10    │ Audio codec 볼륨/뮤트 제어       │
+    └──────────────┴─────────┴──────────────────────────────────┘
+
+  ES8388 Volume Control:
+    audio_player_set_volume(vol) → es8388_set_volume(vol) → FC2 I2C
+    audio_player_pause/resume()  → es8388_set_mute()      → FC2 I2C
+    vol: 0x00=최대, 0x21=-33dB, 0x22+=뮤트
+
+
+FLEXCOMM3 (FC3) - Debug Console UART
+─────────────────────────────────────
+  Pin Mapping:
+    GPIO26 (HSGPIO0[26])  → FC3_TXD_SCL_MISO_WS (UART TX)
+    GPIO28 (HSGPIO0[28])  → FC3_RXD_SDA_MOSI_DATA (UART RX)
+
+  Configuration:
+    Protocol:       USART
+    Baudrate:       115200 bps
+
+  Notes:
+    - Default board configuration (unchanged)
+    - Connected to MCU-Link USB-UART bridge
+    - Zephyr logging and shell interface
+    - GPIO26 conflict: prevents use of SCT_OUT4 for IR TX
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. TIMER PERIPHERALS (IR TRANSMITTER)                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+SCTIMER - IR Carrier Generator
+───────────────────────────────
+  Pin:            GPIO27 (HSGPIO0[27]) → SCT_OUT5
+  Frequency:      38 kHz, Duty: 33%
+  Pinctrl:        &pinmux_ir_tx
+
+CTIMER1 - IR Symbol Sequencer
+──────────────────────────────
+  Clock:          1 MHz (1 μs tick)
+  Operation:      mark/space 타이밍, IOPCTL 함수 mux 전환
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. GPIO INPUTS                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Rotary Encoder (EC16)
+─────────────────────
+  GPIO4  → ROT_A (Phase A,  GPIO_INT_EDGE_BOTH, pull-up)
+  GPIO5  → ROT_B (Phase B,  GPIO_INT_EDGE_BOTH, pull-up)
+  GPIO11 → ROT_SW (Button,  GPIO_INT_EDGE_FALLING, active-low, pull-up)
+  Aliases: rot-a, rot-b, rot-sw
+
+General Purpose Inputs
+───────────────────────
+  GPIO44 → INPUT0 (GPIO_INT_EDGE_FALLING, active-low, pull-up)  alias: input-0
+  GPIO45 → INPUT1 (GPIO_INT_EDGE_FALLING, active-low, pull-up)  alias: input-1
+
+Infrared Receiver (TSDP341)
+─────────────────────────────
+  GPIO18 → IR_RX (GPIO_INT_EDGE_BOTH, active-low, pull-up)  alias: ir-rx
+  Timestamp:  k_cycle_get_32() (5 ns 분해능)
+  Frame end:  k_work_delayable 12 ms
+
+  Supported Protocols:
+    ┌─────────────────────┬─────────────────────────────────────────────┐
+    │ IR_PROTO_NEC        │ 9 ms + 4.5 ms   32-bit LSB                  │
+    │ IR_PROTO_NEC_EXT    │ 9 ms + 4.5 ms   32-bit, 16-bit address      │
+    │ IR_PROTO_NEC_REPEAT │ 9 ms + 2.25 ms  홀드키 반복 버스트           │
+    │ IR_PROTO_LG_AC      │ 8.5 ms + 4.25 ms 28-bit LSB  LG 에어컨      │
+    │ IR_PROTO_SAMSUNG_AC │ 690 µs + 17844 µs Samsung 에어컨            │
+    └─────────────────────┴─────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. GPIO OUTPUTS                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+SK6812 RGBW LED Strip
+─────────────────────
+  GPIO46 → SK6812_DATA (ws2812-gpio, bit-bang, fast slew)
+  Chain:  8 LEDs, Color: GRBW
+  Alias:  led-strip
+  Note:   LCDIC 비활성화 후 GPIO46 재사용
+
+APA102 (Optional)
+──────────────────
+  GPIO47 → DATA, GPIO48 → CLK
+  Enable: CONFIG_APP_LED_APA102=y
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 5. AUDIO (ES8388 I2C 제어)                                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+ES8388 Audio Codec — I2C 볼륨 제어
+─────────────────────────────────────
+  제어 버스:     FC2 I2C (GPIO16=SDA, GPIO17=SCL, addr=0x10)
+  오디오 버스:   ESP32-A1S 내부 I2S (RW612 미연결)
+
+  RW612 담당:
+    - ES8388 초기화 (power-on, DAC 설정)
+    - 볼륨 조절: LOUT1VOL(0x2E) / ROUT1VOL(0x2F)  0x00=최대 ~ 0x21=-33dB
+    - 뮤트:      DACCONTROL3(0x19) bit2
+
+  ESP32-A1S 담당:
+    - I2S Master → ES8388 오디오 데이터 재생
+    - BT A2DP 수신 / SD카드 재생 등
+
+  API:
+    audio_player_init()         → ES8388 I2C 초기화
+    audio_player_set_volume(v)  → es8388_set_volume(v)
+    audio_player_pause()        → es8388_set_mute(true)
+    audio_player_resume()       → es8388_set_mute(false)
+    audio_player_write_pcm()    → -ENOTSUP (I2S 미사용)
+
+
+================================================================================
+DEVICE TREE ALIASES SUMMARY
+================================================================================
+
+Alias Name      Target Node        Purpose
+----------      -----------        -------
+radar-uart      &flexcomm0         Radar module UART
+led-strip       &sk6812            SK6812 RGBW LED strip
+ir-rx           &ir_rx_pin         IR receiver GPIO input
+rot-a           &rot_enc_a         Rotary encoder Phase A
+rot-b           &rot_enc_b         Rotary encoder Phase B
+rot-sw          &rot_enc_sw        Rotary encoder push button
+input-0         &gpio_input0       GPIO44 falling edge input
+input-1         &gpio_input1       GPIO45 falling edge input
+arduino_i2c     &flexcomm2         Sensor + ES8388 I2C bus
+
+
+================================================================================
+WIRELESS INTERFACES (INTERNAL RADIO)
+================================================================================
+
+WiFi (802.11ax / Wi-Fi 6)
+  Driver: CONFIG_WIFI_NXP=y, CONFIG_NXP_RW610=y
+  Heap:   204800 bytes
+
+Bluetooth 5.3 LE
+  Device Name: "zCubeTarget"
+  Roles:       Peripheral
+  Services:    Custom GATT (ctrl, status, prov, ir, led)
+  Note:        BT Classic A2DP 불가 — Zephyr hal_nxp에 BR/EDR 펌웨어 블롭 없음
+
+
+================================================================================
+DMA CHANNEL ASSIGNMENTS
+================================================================================
+
+  ┌─────────┬──────────────┬──────────────────────────────────┐
+  │ Channel │ Peripheral   │ Purpose                          │
+  ├─────────┼──────────────┼──────────────────────────────────┤
+  │ DMA0[0] │ FLEXCOMM0    │ Radar UART RX                    │
+  │ DMA0[1] │ FLEXCOMM0    │ Radar UART TX                    │
+  │ DMA0[2] │ (미사용)     │ 이전: FC1 I2S RX (제거됨)        │
+  │ DMA0[3] │ (미사용)     │ 이전: FC1 I2S TX (제거됨)        │
+  └─────────┴──────────────┴──────────────────────────────────┘
+
+
+================================================================================
+FLEXCOMM ALLOCATION SUMMARY
+================================================================================
+
+  FC0  USART  Radar UART           (GPIO2/3)
+  FC1  -      미사용               (GPIO7/8/9 미연결)
+  FC2  I2C    Sensor + ES8388 제어 (GPIO16/17)
+  FC3  USART  Debug Console        (GPIO26/28)
+
+
+================================================================================
+PROJECT OVERVIEW
+================================================================================
+
+Key Features:
+  ✓ WiFi connectivity (802.11ax)
+  ✓ Bluetooth LE (BLE 5.3, GATT peripheral)
+  ✓ ES8388 볼륨/뮤트 제어 (I2C, ESP32-A1S 오디오 연동)
+  ✓ Environmental sensing (BH1750 lux, AMG8833 thermal)
+  ✓ Smart lighting (SK6812 RGBW LED strip)
+  ✓ IR TX/RX (Samsung AC / NEC / LG AC 프로토콜)
+  ✓ Presence detection (radar UART)
+  ✓ User input (rotary encoder)
+  ✓ Non-volatile storage (NVS)
+  ✗ BT Classic A2DP — Zephyr hal_nxp 미지원
+
+
+================================================================================
+KNOWN LIMITATIONS
+================================================================================
+
+  1. BT Classic A2DP 불가
+     Zephyr hal_nxp에 BR/EDR 펌웨어 블롭 없음 (ble_a2.bin 만 제공)
+
+  2. SK6812 LED 업데이트 시 ~300 μs 인터럽트 차단
+
+  3. WiFi 힙 사용량 큼 (204800 bytes)
+
+  4. FC2 I2C 단일 버스 공유 (BH1750 + AMG8833 + ES8388)
+
+
+================================================================================
+REVISION HISTORY
+================================================================================
+
+v1.0  2026-05-28  Initial pin assignment documentation
+v1.1  2026-05-28  Reorganized structure, troubleshooting guide 추가
+v1.2  2026-05-28  IR RX (TSDP341/GPIO18) 구현 추가
+v1.3  2026-05-29  FC1 I2S 제거 — 오디오 재생 ESP32-A1S 위임
+                  ES8388 FC2 I2C 볼륨 제어만 유지
+                  BT Classic A2DP 불가 확인 (hal_nxp 블롭 없음)
+
+
+================================================================================
+END OF IO PIN ASSIGNMENT DOCUMENT
+================================================================================
+
+RAM 사용량 (큰 순서)
+시스템 풀 (단일 최대 소비자)
+항목	              크기	                                          설정 위치
+WiFi                힙 (CONFIG_HEAP_MEM_POOL_SIZE)	204,800 B	      prj.conf:36
+스레드 스택 — prj.conf 설정
+태스크	            크기	                                          설정 위치
+sys_work_q	       32,768 B	                                        prj.conf:78
+BT RX thread	      32,768 B	                                      prj.conf:79
+Zephyr main thread	16,384 B	                                      prj.conf:73
+NET TX / RX / TCP_WORKQ (각각)	8,192 B × 3 = 24,576 B	            prj.conf:75–77
+BT long workqueue	  8,192 B                                       	prj.conf:85
+NET mgmt event	    4,608 B	                                        prj.conf:41
+idle thread	        2,048 B                                         prj.conf:74
+스레드 스택 — 앱 태스크
+태스크	            크기	                                            위치
+app_main_task   	4,096 B	                                          app_main.h:20
+tcp_client	      4,096 B	                                          app_tcp_client.c:21
+tcp_server	      4,096 B	                                          app_tcp_server.c:21
+lux_task ⚠️	      4,096 B	                                          lux_task.c:17
+amg_task ⚠️	      3,072 B	                                          amg8833_task.c:15
+ir_tx thread	    2,048 B	                                          ir_tx_zephyr.c:29
+
+⚠️ CONFIG_APP_SENSORS_ENABLE가 꺼져 있어도 static K_THREAD_STACK_DEFINE이 함수 내부에 있어서 
+BSS에 항상 7,168 B 점유됨 — lux_task_start() / amg_task_start() 호출 여부와 무관
+
+정적 버퍼 (BSS)
+버퍼	              크기	                                            위치
+IR TX 심볼 버퍼     s_buf[384 × 4B]	1,536 B	                            ir_tx_zephyr.c:45
+Radar DMA 이중버퍼  rx_buf[2][512]	1,024 B	                            app_radar_zephyr.c:51
+TCP client rxbuf  (static)	512 B	                                     app_tcp_client.c:49
+Radar ring buffer	512 B	                                              app_radar_zephyr.c:43
+TCP server rxbuf  (static)	512 B	                                    app_tcp_server.c:70
+LED strip         s_pixels[64 × 4B]	256 B	                            led_strip_zephyr.c:47
+빌드에서 제외된 항목 (현재 RAM 미사용)
+항목	제외 이유	절약
+IR RX 이중버퍼      s_buf[2][384×4B]	                                 ir_rx_nxp_gpio_ctimer.c 제외	3,072 B
+OTA HTTP 스택 + 버퍼	app/ota/*.c 제외	                                ~11,264 B
+SK6812 SPI 버퍼 s_tx[8×32+80]	sk6812.c 제외	336 B
+합계 요약
+범주	합계
+WiFi힙	              204,800 B
+prj.conf 스택 합계	  ~120,768 B
+앱 태스크 스택 합계	    ~19,456 B
+정적 버퍼 합계	      ~4,352 B
+알려진 총합	          ~349 KB
+RW612 SRAM은 1.2 MB이므로 아직 여유가 있지만, WiFi 힙 204 KB와 시스템 스택 121 KB가 대부분을 차지합니다.
+k_sleep() — 상대 시간 대기
+
+k_sleep(K_MSEC(200));        /* 밀리초 */
+k_sleep(K_USEC(500));        /* 마이크로초 */
+k_sleep(K_SECONDS(1));       /* 초 */
+k_sleep(K_MINUTES(1));       /* 분 */
+k_sleep(K_FOREVER);          /* 무한 대기 */
+k_sleep(K_NO_WAIT);          /* 즉시 반환 (0) */
+k_sleep() — 절대 시간 대기 (주기 루프용)
+
+/* next_time이 지날 때까지 대기 — 드리프트 없는 주기 루프에 사용 */
+k_sleep(K_TIMEOUT_ABS_MS(next_time));   /* ms 단위 절대 시각 */
+k_sleep(K_TIMEOUT_ABS_TICKS(ticks));    /* tick 단위 절대 시각 */
+k_sleep(K_TIMEOUT_ABS_US(us));          /* µs 단위 절대 시각 */
+현재 lux_task.c:138에서 K_TIMEOUT_ABS_MS를 쓰는 패턴이 이에 해당합니다.
+
+k_msleep() — 편의 함수
+
+k_msleep(200);   /* k_sleep(K_MSEC(200))과 동일 */
+busy-wait (sleep 없이 CPU 점유)
+
+k_busy_wait(500);   /* µs 단위, CPU 블로킹 — 인터럽트 컨텍스트 등 사용 */
+반환값
+k_sleep()은 남은 시간(ticks)을 반환합니다. 신호에 의해 깨어나면 > 0, 정상 만료면 0.
+
+
+k_timepoint_t tp = sys_timepoint_calc(K_MSEC(1000));
+/* ... */
+if (sys_timepoint_expired(tp)) { /* 만료 확인 */ }
+
+이제 결정적 진단을 추가하겠습니다. 같은 버스에 온보드 P3T1755 온도센서가 0x48에 확실히 존재합니다. 이걸 먼저 probe하면 버스 자체 문제인지, 외부 센서(BH1750) 배선 문제인지 한 번에 가려집니다.
+
+핵심 통찰: 알려진 정상 장치(0x48)를 첫 트랜잭션으로 보내면, 그 transfer가 정상 완료(STOP 발생)되어 버스가 깨끗하게 남고, 이후 absent 장치 probe는 정상 NAK(빠른 "not found")이 나옵니다. 반대로 0x48조차 100ms 타임아웃/hang이면 버스가 처음부터 stuck(배선/쇼트/라인 hold)인 것입니다.
+
+lux_task.c hw_init에 0x48 진단 probe를 추가합니다
+
+이것이 "100ms 후 found" 가짜 positive의 정체입니다:
+
+callback_status는 transfer 시작 전에 리셋되지 않습니다. 콜백에서만 갱신됩니다.
+장치가 없으면 정상적으로는 NAK → 콜백 즉시 발생(<1ms) → callback_status=Nak → "not found" 가 나와야 합니다.
+그런데 100ms가 걸렸다는 건 콜백이 전혀 안 왔다는 뜻 — 즉 I2C 마스터 트랜잭션이 완료되지 않고 멈춰있음(SCL hold).
+첫 transfer라 callback_status는 BSS 초기값 0 = kStatus_Success → 타임아웃인데도 성공으로 오인 → 가짜 "found".
+첫 transfer가 버스를 잡은 채(STOP 미발생) 끝나서 → 둘째 probe는 버스 busy로 영구 hang.
+즉 "먼저 한 게 정상, 나중 게 장애"의 진짜 원인은 첫 트랜잭션이 버스를 stuck 상태로 만들기 때문입니다. 주소와 무관합니다.
+
+먼저 제가 넣은 0-byte write는 fsl_i2c에서 더 취약하니 원복하겠습니다.
+
+Edit c:\work\New_zCube\rw612_zephyr\frdm_rw612_blank\app\i2c_bus.c
+Removed 6 lines
+이제 결정적 진단을 추가하겠습니다. 같은 버스에 온보드 P3T1755 온도센서가 0x48에 확실히 존재합니다. 이걸 먼저 probe하면 버스 자체 문제인지, 외부 센서(BH1750) 배선 문제인지 한 번에 가려집니다.
+
+핵심 통찰: 알려진 정상 장치(0x48)를 첫 트랜잭션으로 보내면, 그 transfer가 정상 완료(STOP 발생)되어 버스가 깨끗하게 남고, 이후 absent 장치 probe는 정상 NAK(빠른 "not found")이 나옵니다. 반대로 0x48조차 100ms 타임아웃/hang이면 버스가 처음부터 stuck(배선/쇼트/라인 hold)인 것입니다.
+
+lux_task.c hw_init에 0x48 진단 probe를 추가합니다.
+
+Read c:\work\New_zCube\rw612_zephyr\frdm_rw612_blank\app\sensors\lux_task.c (lines 56-80)
+Edit c:\work\New_zCube\rw612_zephyr\frdm_rw612_blank\app\sensors\lux_task.c
+Added 10 lines
+추가 완료. 이제 빌드 후 로그로 버스 문제 vs 센서 배선 문제를 명확히 가를 수 있습니다.
+
+정리
+바뀐 것
+
+i2c_bus.c probe → 1-byte read로 원복 (0-byte write는 fsl_i2c에서 더 취약)
+lux_task.c hw_init 맨 앞에 온보드 P3T1755(0x48) 진단 probe 추가
+근본 원인 (드라이버 코드로 확인됨) — i2c_mcux_flexcomm.c:201-210:
+
+callback_status가 transfer 전에 리셋되지 않음. k_sem_take 반환값도 미검사.
+첫 transfer가 100ms 걸렸다 = 콜백이 안 옴 = I2C 마스터가 트랜잭션을 완료 못 함. 정상이면 absent 장치는 µs 단위 NAK가 떠야 함.
+첫 transfer라 callback_status가 BSS 초기값 0(=Success) → 타임아웃인데 가짜 "found".
+미완료 transfer가 버스를 잡은 채 끝나 → 둘째 probe가 영구 hang → 워치독 abort.
+즉 "먼저 한 게 정상, 나중 게 장애"는 주소와 무관하고, 첫 트랜잭션이 버스를 stuck으로 만드는 것이 원인입니다.
+
+빌드 후 로그 해석법
+probe 0x48 결과	의미	조치
+found (빠름, <100ms)	버스·페리페럴 정상	0x5C/0x23 미검출은 BH1750 미연결/배선 문제 (SDA/SCL 스왑, ADDR 핀, 풀업)
+NOT found (100ms 타임아웃) 또는 hang	버스가 처음부터 stuck	하드웨어 점검: GPIO16/17 SDA/SCL 라인이 LOW로 물려있는지, 쇼트, 외부 풀업, 잘못 연결된 슬레이브가 SCL hold
+추가로 고려할 옵션 (버스 stuck 자동 복구)
+드라이버에 bus recovery 기능이 있습니다 (i2c_mcux_flexcomm.c:245). 활성화하면 stuck 버스를 bit-bang으로 복구할 수 있습니다:
+
+prj.conf: CONFIG_I2C_MCUX_FLEXCOMM_BUS_RECOVERY=y
+overlay의 &flexcomm2에 scl-gpios/sda-gpios (GPIO17/16) 추가
+다만 이건 증상 완화책이고, 먼저 0x48 probe 결과로 버스 자체가 사는지부터 확인하는 게 순서입니다.
+
+빌드해서 로그 보여주시면 0x48 결과 기준으로 다음 단계 짚어드리겠습니다.

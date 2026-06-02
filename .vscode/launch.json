@@ -1,0 +1,35 @@
+{
+  "configurations": [
+    {
+      "type": "mcuxpresso-debug",
+      "name": "Debug (JLink)",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "executable": {
+        "elf": "${workspaceFolder}/debug/zephyr/zephyr.elf"
+      },
+      "svdPath": "${workspaceFolder}/svd/RW612.xml",
+      "stopAtSymbol": "main",
+      "probeSerialNumber": "",
+      "isAttach": false,
+      "skipBuildBeforeDebug": false,
+      "gdbPath": "${userHome}/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe",
+      "gdbInitCommands": [
+        "set remotetimeout 600",
+        "set debug-file-directory",
+        "set non-stop off",
+        "set pagination off"
+      ],
+      "gdbServerConfigs": {
+        "linkserver": {},
+        "segger": {
+          "device": "RW612",
+          "speed": 4000,
+          "interface": "SWD"
+        },
+        "pemicro": {}
+      },
+      "showDevDebugOutput": "none"
+    }
+  ]
+}

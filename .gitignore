@@ -1,0 +1,21 @@
+# Build output directories (west build -d)
+/build/
+/debug/
+/release/
+
+# Python venv
+/.venv/
+
+# IDE / tooling backups & metadata
+/.metadata.backup_*/
+/.mcuxpressoide_packages_support/
+*.backup_mcux
+*.bak
+*.bak_*
+
+# Logs
+*.log
+
+# OS junk
+Thumbs.db
+.DS_Store

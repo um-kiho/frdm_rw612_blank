@@ -1,0 +1,174 @@
+공통 인프라: i2c_bus
+세 디바이스 모두 FC2(FlexComm2) I2C 버스를 공유하며, i2c_bus 래퍼를 통해 접근합니다.
+
+
+[FC2 I2C 버스]
+    ├── ES8388  (0x10 또는 0x11)  — 오디오 DAC
+    ├── AMG8833 (0x68 또는 0x69)  — 적외선 어레이
+    └── BH1750  (0x23 또는 0x5C)  — 조도 센서
+i2c_bus는 내부적으로 mutex를 가져서 세 디바이스가 동시에 버스를 잡는 것을 방지합니다.
+
+ES8388 — 오디오 DAC
+초기화 시퀀스 (es8388_init)
+
+1. 소프트 리셋
+   WR(CONTROL1, 0x80)  → RST 비트 set
+   k_msleep(10)
+   WR(CONTROL1, 0x06)  → normal 동작 재개
+
+2. 전원 관리
+   WR(CONTROL2,  0x1C) → VMIDSEL + ENREF
+   WR(CHIPPOWER, 0x00) → 전체 칩 파워온
+   WR(ADCPOWER,  0xFF) → ADC는 전부 꺼둠 (재생 전용)
+
+3. 슬레이브 모드
+   WR(MASTERMODE, 0x00) → MCU(FC1)가 BCLK/LRCLK 공급
+
+4. DAC 포맷
+   WR(DACCONTROL1, 0x18) → I2S 16-bit
+   WR(DACCONTROL2, 0x02) → DEM(디엠퍼시스) off
+
+5. DAC 볼륨 0 dB
+   WR(DACVOLL, 0x00)
+   WR(DACVOLR, 0x00)
+
+6. Mixer 라우팅: DAC → LOUT1/ROUT1
+   WR(DACCONTROL16, 0x00)
+   WR(DACCONTROL17, 0x90)
+   WR(DACCONTROL20, 0x90)
+   WR(DACCONTROL21, 0xA0)
+
+7. 출력 볼륨 설정 (cfg->out_vol, 기본 0x10 = ~-16dB)
+   WR(LOUT1VOL, vol)
+   WR(ROUT1VOL, vol)
+
+8. DAC 파워온
+   WR(DACPOWER, 0x3C)  → LDACPD/RDACPD/LOUT1/ROUT1 enable
+
+9. 언뮤트
+   WR(DACCONTROL3, 0x00)
+
+런타임 동작
+상황	        I2C 트랜잭션
+볼륨 변경	    LOUT1VOL, ROUT1VOL 각각 1바이트 write
+뮤트/언뮤트	    DACCONTROL3 read → 비트3 토글 → write
+AMG8833—8×8     적외선 어레이
+
+초기화 시퀀스 (amg8833_init)
+
+1. Normal 모드 진입
+   WR(PCTL, 0x00)      → NORMAL_MODE
+   k_sleep(50 ms)      → 전원 안정 대기
+
+2. 초기 리셋
+   WR(RST, 0x3F)       → INITIAL_RESET
+   k_sleep(2 ms)
+
+3. 프레임 레이트 설정
+   WR(FPSC, 0x00)      → 10 fps
+
+4. 인터럽트 비활성
+   WR(INTC, 0x00)      → INT 핀 사용 안 함
+
+5. 첫 유효 프레임 대기
+   k_sleep(100 ms)     → 10fps 기준 1프레임 시간
+
+런타임 동작 (amg8833_read_frame, 100ms 주기)
+
+[I2C Write] 레지스터 포인터 → T01L (0x80)
+[I2C Read]  128바이트 연속 읽기
+            raw[0..127] = 64픽셀 × 2바이트(little-endian)
+
+각 픽셀: 12비트 2의 보수, 단위 0.25°C (Q2 고정소수점)
+         → sign_extend_12()로 음수 처리
+         → pixels_q2[0..63]에 저장
+
+[I2C Write] 레지스터 포인터 → TTHL (0x0E)
+[I2C Read]  2바이트
+            11비트 magnitude + 부호비트, 단위 0.0625°C (Q4)
+            → thermistor_q4 저장
+태스크 루프 (amg_task, 우선순위 2)
+
+while (running):
+    amg8833_read_frame()        → 128바이트 I2C
+    compute_stats()             → min/max/avg (CPU only, I2C 없음)
+    amg8833_read_thermistor()   → 2바이트 I2C
+    publish()                   → mutex로 s_last 갱신, 콜백 호출
+    k_sleep(next_time)          → 절대 시각 기반 정밀 주기
+
+I2C 오류 시 last_rc != OK가 되어 다음 틱에서 amg8833_init() 재시도합니다.
+
+BH1750 — 조도 센서
+BH1750은 레지스터 주소가 없는 커맨드 전용 프로토콜입니다. I2C에 1바이트 opcode만 write하고, read 시에도 레지스터 포인터 없이 바로 2바이트를 읽습니다.
+
+초기화 시퀀스 (lux_task_start → bh1750_init)
+
+bh1750_io_nxp_i2c_init()
+    → i2c_bus_init()                (버스 초기화, 이미 되어 있으면 no-op)
+    → io 함수 포인터 등록
+       write    = nxp_i2c_write     (i2c_bus_write 래핑)
+       read     = nxp_i2c_read      (i2c_bus_read 래핑)
+       delay_ms = k_sleep 래핑
+
+bh1750_init()                       (디바이스 상태만 초기화, I2C 없음)
+
+bh1750_power_on()
+    [I2C Write 1바이트]             → 0x01 (POWER_ON)
+
+bh1750_set_mode(CONT_H)
+    [I2C Write 1바이트]             → 0x01 (POWER_ON, 모드 설정 전 필수)
+    [I2C Write 1바이트]             → 0x10 (CONT_H_RES_MODE)
+
+런타임 동작 (bh1750_read_lux_x100, 500ms 주기)
+
+CONT_H 모드(연속 측정):
+    delay(180 ms)                   → 변환 완료 대기 (k_sleep)
+    [I2C Read 2바이트]               → big-endian raw 값
+    lux_x100 = raw * 1000 / 12   (1.2 lux/LSB 역산)
+
+BH1750은 6가지 측정 모드를 지원합니다.
+
+연속 측정 모드 (Continuous)
+센서가 자동으로 반복 측정합니다.
+
+모드	opcode	분해능	변환시간
+CONT_H	0x10	1 lux	180ms
+CONT_H2	0x11	0.5 lux	180ms
+CONT_L	0x13	4 lux	24ms
+
+1회 측정 모드 (One-Shot)
+측정 1회 후 자동으로 Power Down 상태가 됩니다.
+
+모드	opcode	분해능	변환시간
+ONE_H	0x20	1 lux	180ms
+ONE_H2	0x21	0.5 lux	180ms
+ONE_L 0x23	4 lux	24ms
+
+현재 코드에서 사용 중인 모드
+bh1750.c:85에서 기본값으로 CONT_H (연속 고해상도) 설정됩니다.
+
+
+dev->mode = BH1750_MODE_CONT_H;   // 1 lux, 180ms, 자동 반복
+lux 계산 스케일:
+
+H, ONE_H, CONT_L → raw / 1.2 (1.2 lux/LSB)
+H2, ONE_H2 → raw / 2.4 (0.5 lux/LSB, 더 세밀)
+One-Shot 모드는 read 전에 opcode를 매번 다시 write해야 측정이 시작됩니다 (bh1750.c:121).
+
+ONE_SHOT 모드인 경우에는 read 전에 opcode를 매번 다시 write하여 측정을 트리거합니다.
+
+전체 타이밍 관계
+
+main thread
+  └─ bt_enable() → bt_ready_cb()
+       ├─ audio_player_init()
+       │    └─ es8388_init()        ← I2C 9회 write (약 1ms)
+       └─ app_wifi_init()
+
+amg_task (prio 2, 100ms 주기)
+  └─ amg8833_read_frame()           ← I2C 128바이트 read
+  └─ amg8833_read_thermistor()      ← I2C 2바이트 read
+
+lux_task (prio 2, 500ms 주기)
+  └─ bh1750_read_lux_x100()         ← delay 180ms + I2C 2바이트 read
+amg_task와 lux_task가 동시에 I2C에 접근할 때 i2c_bus mutex가 충돌을 막아주며, ES8388의 뮤트/볼륨 변경도 동일한 mutex로 직렬화됩니다.

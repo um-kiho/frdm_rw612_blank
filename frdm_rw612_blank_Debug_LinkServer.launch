@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<launchConfiguration type="com.crt.dsf.lpcxpresso.appLaunchType">
+<stringAttribute key="com.crt.dsf.crt.binary" value="debug/zephyr/zephyr.elf"/>
+<booleanAttribute key="com.crt.dsf.crt.create_symbols_window" value="false"/>
+<stringAttribute key="com.crt.dsf.crt.device" value="RW612"/>
+<stringAttribute key="com.crt.dsf.crt.server" value="LinkServer"/>
+<booleanAttribute key="com.crt.dsf.crt.do_halt_at" value="true"/>
+<stringAttribute key="com.crt.dsf.crt.halt_at" value="main"/>
+<booleanAttribute key="com.crt.dsf.crt.do_reset_on_restart" value="true"/>
+<booleanAttribute key="com.crt.dsf.crt.do_semihosting" value="false"/>
+<stringAttribute key="com.crt.dsf.crt.connection" value="com.nxp.mcuxpresso.core.probe.linkserver.cortex-m"/>
+<stringAttribute key="com.crt.dsf.crt.probe_id" value=""/>
+<intAttribute key="com.crt.dsf.crt.wirespeed" value="8000"/>
+<booleanAttribute key="com.crt.dsf.crt.flashload_enable" value="true"/>
+<stringAttribute key="com.nxp.mcuxpresso.flash.program" value="LinkServer"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.doHalt" value="true"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.doReset" value="true"/>
+<stringAttribute key="org.eclipse.cdt.debug.gdbjtag.core.imageFileName" value=""/>
+<stringAttribute key="org.eclipse.cdt.debug.gdbjtag.core.imageOffset" value=""/>
+<stringAttribute key="org.eclipse.cdt.debug.gdbjtag.core.initCommands" value="set non-stop off&#10;set pagination off&#10;set remotetimeout 60000&#10;##target_extended_remote##&#10;monitor halt&#10;"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.loadImage" value="true"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.loadSymbols" value="true"/>
+<stringAttribute key="org.eclipse.cdt.debug.gdbjtag.core.pcRegister" value=""/>
+<intAttribute key="org.eclipse.cdt.debug.gdbjtag.core.portNumber" value="0"/>
+<stringAttribute key="org.eclipse.cdt.debug.gdbjtag.core.runCommands" value=""/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.setPcRegister" value="false"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.setResume" value="true"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.setStopAt" value="true"/>
+<stringAttribute key="org.eclipse.cdt.debug.gdbjtag.core.stopAt" value="main"/>
+<stringAttribute key="org.eclipse.cdt.debug.gdbjtag.core.symbolsFileName" value=""/>
+<stringAttribute key="org.eclipse.cdt.debug.gdbjtag.core.symbolsOffset" value=""/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.useFileForImage" value="false"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.useFileForSymbols" value="false"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.useProjBinaryForImage" value="true"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.useProjBinaryForSymbols" value="true"/>
+<booleanAttribute key="org.eclipse.cdt.debug.gdbjtag.core.useRemoteTarget" value="true"/>
+<stringAttribute key="org.eclipse.cdt.dsf.gdb.DEBUG_NAME" value="arm-none-eabi-gdb"/>
+<booleanAttribute key="org.eclipse.cdt.dsf.gdb.NON_STOP" value="false"/>
+<booleanAttribute key="org.eclipse.cdt.dsf.gdb.UPDATE_THREADLIST_ON_SUSPEND" value="false"/>
+<intAttribute key="org.eclipse.cdt.launch.ATTR_BUILD_BEFORE_LAUNCH_ATTR" value="2"/>
+<stringAttribute key="org.eclipse.cdt.launch.DEBUGGER_ID" value="com.crt.dsf.lpcxpresso.debugger"/>
+<stringAttribute key="org.eclipse.cdt.launch.DEBUGGER_START_MODE" value="run"/>
+<booleanAttribute key="org.eclipse.cdt.launch.DEBUGGER_STOP_AT_MAIN" value="true"/>
+<stringAttribute key="org.eclipse.cdt.launch.DEBUGGER_STOP_AT_MAIN_SYMBOL" value="main"/>
+<stringAttribute key="org.eclipse.cdt.launch.PROGRAM_NAME" value="debug/zephyr/zephyr.elf"/>
+<stringAttribute key="org.eclipse.cdt.launch.PROJECT_ATTR" value="frdm_rw612_blank"/>
+<booleanAttribute key="org.eclipse.cdt.launch.PROJECT_BUILD_CONFIG_AUTO_ATTR" value="false"/>
+<stringAttribute key="org.eclipse.cdt.launch.PROJECT_BUILD_CONFIG_ID_ATTR" value="cdt.managedbuild.config.gnu.exe.debug.1"/>
+<stringAttribute key="com.nxp.mcuxpresso.core.rtos" value="None"/>
+<listAttribute key="org.eclipse.debug.core.MAPPED_RESOURCE_PATHS">
+<listEntry value="/frdm_rw612_blank"/>
+</listAttribute>
+<listAttribute key="org.eclipse.debug.core.MAPPED_RESOURCE_TYPES">
+<listEntry value="4"/>
+</listAttribute>
+<booleanAttribute key="org.eclipse.cdt.launch.use_terminal" value="true"/>
+<stringAttribute key="org.eclipse.dsf.launch.MEMORY_BLOCKS" value="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot; standalone=&quot;no&quot;?&gt;&#10;&lt;memoryBlockExpressionList context=&quot;reserved-for-future-use&quot;/&gt;&#10;"/>
+<stringAttribute key="process_factory_id" value="com.crt.dsf.gdb.GDBProcessFactory"/>
+</launchConfiguration>

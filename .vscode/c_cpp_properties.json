@@ -1,0 +1,27 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "Release",
+      "compileCommands": "${workspaceFolder}/release/compile_commands.json",
+      "forcedInclude": [
+        "${workspaceFolder}/release/zephyr/include/generated/zephyr/autoconf.h"
+      ],
+      "intelliSenseMode": "gcc-arm",
+      "browse": {
+        "limitSymbolsToIncludedHeaders": true
+      }
+    },
+    {
+      "name": "Debug",
+      "compileCommands": "${workspaceFolder}/debug/compile_commands.json",
+      "forcedInclude": [
+        "${workspaceFolder}/debug/zephyr/include/generated/zephyr/autoconf.h"
+      ],
+      "intelliSenseMode": "gcc-arm",
+      "browse": {
+        "limitSymbolsToIncludedHeaders": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"/c/Program Files/SEGGER/JLink_V930/GDBServer/\" | grep -i \"rtos\\\\|zephyr\")",
+      "Read(//c/Program Files/SEGGER/JLink_V930/GDBServer//**)"
+    ]
+  }
+}

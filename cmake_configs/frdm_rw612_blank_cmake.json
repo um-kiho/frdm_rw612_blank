@@ -1,0 +1,75 @@
+{
+  "name": "frdm_rw612_blank",
+  "language": "c",
+  "toolchain_path": "",
+  "toolchainName": "TC32-GCC Toolchain",
+  "targets": [
+    {
+      "name": "Debug",
+      "path": "./",
+      "toolchain": "Linux GCC",
+      "toolchainVersionName": "Linux GCC",
+      "directories": [
+        "app",
+        "src"
+      ],
+      "global_options": [],
+      "asm_compile_options": [],
+      "cpp_compile_options": [],
+      "c_compile_options": [],
+      "linker_script": "",
+      "linker_options": [
+        "--gc-sections",
+        "-T${CMAKE_CURRENT_SOURCE_DIR}/boot.link"
+      ],
+      "linker_directories": [],
+      "linker_libraries": [],
+      "cpp_linker_script": "",
+      "cpp_linker_options": [],
+      "cpp_linker_directories": [],
+      "cpp_linker_libraries": [],
+      "pre_build": [],
+      "post_build": [],
+      "print_size": [
+        "-t"
+      ],
+      "obj_copy": [],
+      "obj_dump": [],
+      "sub_directories": []
+    },
+    {
+      "name": "Release",
+      "path": "./",
+      "toolchain": "Linux GCC",
+      "toolchainVersionName": "Linux GCC",
+      "directories": [
+        "app",
+        "src"
+      ],
+      "global_options": [],
+      "asm_compile_options": [],
+      "cpp_compile_options": [],
+      "c_compile_options": [],
+      "linker_script": "",
+      "linker_options": [
+        "--gc-sections",
+        "-T${CMAKE_CURRENT_SOURCE_DIR}/boot.link"
+      ],
+      "linker_directories": [],
+      "linker_libraries": [],
+      "cpp_linker_script": "",
+      "cpp_linker_options": [],
+      "cpp_linker_directories": [],
+      "cpp_linker_libraries": [],
+      "pre_build": [],
+      "post_build": [],
+      "print_size": [
+        "-t"
+      ],
+      "obj_copy": [],
+      "obj_dump": [],
+      "sub_directories": []
+    }
+  ],
+  "toolchainVersionName": "Linux GCC"
+}

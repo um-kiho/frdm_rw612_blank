@@ -1,0 +1,148 @@
+/*
+ * Copyright 2026 zCube
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * zCube FRDM-RW612 pin assignments:
+ *
+ *  GPIO2  (HSGPIO0[2])  FC0 USART TX  → Radar UART
+ *  GPIO3  (HSGPIO0[3])  FC0 USART RX  → Radar UART
+ *  GPIO4  (HSGPIO0[4])  GPIO INPUT    → EC16 ROT_A (쿼드러처 A상)
+ *  GPIO5  (HSGPIO0[5])  GPIO INPUT    → EC16 ROT_B (쿼드러처 B상)
+ *  GPIO11 (HSGPIO0[11]) GPIO INPUT    → EC16 ROT_SW (push-button, pull-up, falling edge)
+ *  GPIO16 (HSGPIO0[16]) FC2 I2C SDA   → BH1750, AMG8833, ES8388(볼륨)
+ *  GPIO17 (HSGPIO0[17]) FC2 I2C SCL   → BH1750, AMG8833, ES8388
+ *  GPIO18 (HSGPIO0[18]) GPIO INPUT    → IR 수신 (demod output, active-low)
+ *  GPIO27 (HSGPIO0[27]) SCT_OUT5      → IR 송신 캐리어 38 kHz
+ *  GPIO44 (HSGPIO1[12]) GPIO INPUT    → INPUT0 (pull-up, falling edge IRQ)
+ *  GPIO45 (HSGPIO1[13]) GPIO INPUT    → INPUT1 (pull-up, falling edge IRQ)
+ *  GPIO46 (HSGPIO1[14]) GPIO OUTPUT   → SK6812 DATA (단선 NRZ, 기본)
+ *  GPIO47 (HSGPIO1[15]) GPIO OUTPUT   → APA102 DATA (CONFIG_APP_LED_APA102)
+ *  GPIO48 (HSGPIO1[16]) GPIO OUTPUT   → APA102 CLK  (CONFIG_APP_LED_APA102)
+ *
+ * GPIO44-49: LCDIC 비활성화 → GPIO로 재사용
+ *   44=INPUT0, 45=INPUT1, 46=SK6812 DATA, 47=APA102 DATA, 48=APA102 CLK
+ */
+
+#include <zephyr/dt-bindings/led/led.h>
+
+&pinctrl {
+	/* Radar UART: FC0 GPIO2(TX) / GPIO3(RX) */
+	pinmux_fc0_radar: pinmux_fc0_radar {
+		group0 {
+			pinmux = <IO_MUX_FC0_USART_DATA>;
+			slew-rate = "normal";
+		};
+	};
+
+	/* IR TX: GPIO27 → SCT_OUT5 (38 kHz 캐리어)
+	 * GPIO26(SCT_OUT4)은 FC3 USART(콘솔)와 충돌 → GPIO27(SCT_OUT5) 사용 */
+	pinmux_ir_tx: pinmux_ir_tx {
+		group0 {
+			pinmux = <IO_MUX_SCT_OUT_5>;
+			slew-rate = "fast";
+		};
+	};
+
+	/* GPIO46 (HSGPIO1[14]) → SK6812 단선 데이터 출력 */
+	pinmux_hsgpio1: pinmux_hsgpio1 {
+		group1 {
+			pinmux = <IO_MUX_GPIO46>;
+			slew-rate = "fast";
+		};
+	};
+
+};
+
+/* LCDIC 비활성화: GPIO44-49를 LCD SPI 모드에서 해제 */
+&lcdic {
+	status = "disabled";
+};
+
+/* Radar UART: FC0 — DMA async (채널 0=RX, 1=TX) */
+&flexcomm0 {
+	compatible = "nxp,lpc-usart";
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&pinmux_fc0_radar>;
+	pinctrl-names = "default";
+	dmas = <&dma0 0>, <&dma0 1>;
+	dma-names = "rx", "tx";
+};
+
+/* SCTimer: IR TX 캐리어용 SCT_OUT5(GPIO27) 사용
+ * (GPIO26=SCT_OUT4는 FC3 UART TX와 충돌) */
+&sctimer {
+	pinctrl-0 = <&pinmux_ir_tx>;
+};
+
+/* FC1 I2S 제거 — 오디오 재생은 ESP32-A1S 담당, RW612는 ES8388 I2C 제어만 수행 */
+
+/ {
+	aliases {
+		ir-rx      = &ir_rx_pin;
+		led-strip  = &sk6812;
+		radar-uart = &flexcomm0;
+		rot-a      = &rot_enc_a;
+		rot-b      = &rot_enc_b;
+		rot-sw     = &rot_enc_sw;
+		input-0    = &gpio_input0;
+		input-1    = &gpio_input1;
+	};
+
+	/* EC16 로터리 인코더: GPIO4=ROT_A, GPIO5=ROT_B, GPIO11=ROT_SW
+	 * 내부 풀업 사용; A/B ANY_EDGE, SW falling edge 인터럽트 */
+	rot_enc_dev: rotary-enc {
+		compatible = "gpio-keys";
+		rot_enc_a: rot_enc_a {
+			gpios = <&hsgpio0 4 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
+			label = "ROT_A";
+		};
+		rot_enc_b: rot_enc_b {
+			gpios = <&hsgpio0 5 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
+			label = "ROT_B";
+		};
+		rot_enc_sw: rot_enc_sw {
+			gpios = <&hsgpio0 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			label = "ROT_SW";
+		};
+	};
+
+	/* IR 수신: GPIO18 = HSGPIO0[18]
+	 * 일반 IR 수신 모듈 출력은 active-low (신호 수신 시 LOW) */
+	ir_rx_dev: ir-rx {
+		compatible = "gpio-keys";
+		ir_rx_pin: ir_rx_pin {
+			gpios = <&hsgpio0 18 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			label = "IR RX";
+		};
+	};
+
+	/* 범용 GPIO 입력 2채널: GPIO44/GPIO45 (HSGPIO1[12], HSGPIO1[13])
+	 * 내부 풀업 — 평상시 HIGH, 신호 인가 시 LOW (falling edge 트리거)
+	 * 인터럽트 트리거: GPIO_INT_EDGE_FALLING (애플리케이션에서 설정)
+	 * LCDIC 비활성화 구간 재사용 */
+	gpio_inputs: gpio-inputs {
+		compatible = "gpio-keys";
+		gpio_input0: gpio_input0 {
+			gpios = <&hsgpio1 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			label = "INPUT0";
+		};
+		gpio_input1: gpio_input1 {
+			gpios = <&hsgpio1 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			label = "INPUT1";
+		};
+	};
+
+	/* SK6812 RGBW LED strip: GPIO46 = HSGPIO1[14]
+	 * ws2812-gpio: 단선 NRZ 비트뱅 드라이버 (CLK 핀 불필요)
+	 * chain-length: 실제 연결된 LED 수로 수정할 것 */
+	sk6812: ws2812 {
+		compatible = "worldsemi,ws2812-gpio";
+		gpios = <&hsgpio1 14 GPIO_ACTIVE_HIGH>;
+		chain-length = <8>;
+		color-mapping = <LED_COLOR_ID_GREEN
+				 LED_COLOR_ID_RED
+				 LED_COLOR_ID_BLUE
+				 LED_COLOR_ID_WHITE>;
+	};
+};

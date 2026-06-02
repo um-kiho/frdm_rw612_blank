@@ -1,0 +1,12 @@
+{
+  "version": "25.3",
+  "toolchainPath": "${userHome}/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi",
+  "linkedProjects": [],
+  "trustZoneType": "none",
+  "multicoreType": "none",
+  "projectType": "zephyr-workspace",
+  "sdk": {
+    "version": "4.4.99",
+    "path": "c:\\work\\New_zCube\\rw612_zephyr"
+  }
+}

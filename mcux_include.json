@@ -1,0 +1,37 @@
+{
+  "version": 7,
+  "cmakeMinimumRequired": {
+    "major": 3
+  },
+  "configurePresets": [
+    {
+      "name": "debug-env",
+      "displayName": "debug-env",
+      "hidden": true,
+      "environment": {
+        "MCUX_VENV_PATH": "C:/Users/User/.mcuxpressotools/.mcux-venv-3.12/Scripts",
+        "PATH": "$env{MCUX_VENV_PATH}${pathListSep}$penv{PATH}",
+        "ZEPHYR_BASE": "c:\\work\\New_zCube\\rw612_zephyr\\zephyr"
+      },
+      "cacheVariables": {
+        "ZEPHYR_TOOLCHAIN_VARIANT": "zephyr",
+        "ZEPHYR_SDK_INSTALL_DIR": "C:/Users/User/zephyr-sdk-1.0.1"
+      }
+    },
+    {
+      "name": "release-env",
+      "displayName": "release-env",
+      "hidden": true,
+      "environment": {
+        "MCUX_VENV_PATH": "C:/Users/User/.mcuxpressotools/.mcux-venv-3.12/Scripts",
+        "PATH": "$env{MCUX_VENV_PATH}${pathListSep}$penv{PATH}",
+        "ZEPHYR_BASE": "c:\\work\\New_zCube\\rw612_zephyr\\zephyr"
+      },
+      "cacheVariables": {
+        "ZEPHYR_TOOLCHAIN_VARIANT": "zephyr",
+        "ZEPHYR_SDK_INSTALL_DIR": "C:/Users/User/zephyr-sdk-1.0.1"
+      }
+    }
+  ],
+  "buildPresets": []
+}

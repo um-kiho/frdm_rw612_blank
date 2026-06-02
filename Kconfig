@@ -1,0 +1,29 @@
+# Copyright 2026 zCube
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "zCube FRDM-RW612 Application"
+
+config APP_LED_APA102
+	bool "Use APA102 LED strip instead of SK6812"
+	default n
+	help
+	  Select APA102 (GPIO47=DATA, GPIO48=CLK) instead of the default
+	  SK6812 RGBW (GPIO46=DATA single-wire NRZ).
+
+config APP_SENSORS_ENABLE
+	bool "Enable I2C sensors (BH1750 + AMG8833)"
+	default n
+	help
+	  BH1750 조도 센서(0x23)와 AMG8833 열화상 센서(0x69)를 활성화한다.
+	  FC2 I2C 버스(GPIO16=SDA, GPIO17=SCL)에 물리적으로 연결된 경우에만 y로 설정.
+	  미연결 상태에서 활성화 시 I2C 버스 hang 발생.
+
+config APP_AUDIO_ES8388
+	bool "Enable ES8388 audio codec (I2C volume/mute control)"
+	default n
+	help
+	  ES8388 오디오 코덱을 FC2 I2C(GPIO16=SDA, GPIO17=SCL, addr=0x10)로 초기화한다.
+	  볼륨·뮤트 제어만 수행하며, 오디오 재생은 ESP32-A1S가 담당한다.
+	  미연결 상태에서 활성화 시 I2C 초기화 실패(ENODEV)가 발생할 수 있다.
+
+source "Kconfig.zephyr"
