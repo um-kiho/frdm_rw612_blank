@@ -395,7 +395,7 @@ void app_main_task(void *arg)
 	} else {
 		LOG_INF("BH1750 lux task created (I2C probe pending)");
 	}
-	if (amg_task_start(0x69, 100, NULL, NULL) != 0) {
+	if (amg_task_start(0x69, 500, NULL, NULL) != 0) {
 		LOG_WRN("amg_task_start failed");
 	} else {
 		LOG_INF("AMG8833 task created (I2C probe pending)");

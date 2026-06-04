@@ -4,6 +4,7 @@
  */
 
 #include "amg8833_task.h"
+#include "i2c_bus.h"
 
 #include <string.h>
 #include <zephyr/kernel.h>
@@ -86,11 +87,14 @@ static void amg_task(void *p1, void *p2, void *p3)
     LOG_INF("probing I2C addr=0x%02X (watchdog=%u ms)...", s_addr, AMG_PROBE_TIMEOUT_MS);
 
     s_probing = true;
-    int last_rc = amg8833_init(&s_dev, s_addr);
+    /* lux_task 와 동일한 탐지 방식: 실제 통신(레지스터 write) 전에 i2c_bus_probe()
+     * (0바이트 write = 빠른 ACK 확인)로 장치 존재부터 확인한다. */
+    bool found = (i2c_bus_probe(s_addr) == 0);
+    int last_rc = found ? amg8833_init(&s_dev, s_addr) : AMG8833_ERR_IO;
     s_probing = false;
     k_work_cancel_delayable(&s_watchdog_dwork);
 
-    if (last_rc != AMG8833_OK) {
+    if (!found || last_rc != AMG8833_OK) {
         /* 미응답/미연결 센서를 계속 폴링하면 실패 I2C 전송(NAK + 드라이버의
          * I2C_MasterTransferAbort)이 WiFi 연결 임계구간과 겹쳐 시스템 전체가
          * 멈춘다. 못 찾으면 태스크를 종료해 추가 I2C 트래픽을 만들지 않는다.
@@ -108,7 +112,8 @@ static void amg_task(void *p1, void *p2, void *p3)
         memset(&s, 0, sizeof(s));
 
         /* 센서가 한번 확인된 뒤에는 read 만 한다. read 실패해도 재init 하지
-         * 않는다(실패 I2C 폭주 방지). */
+         * 않는다(실패 I2C 폭주 방지). 실패한 전송은 i2c_bus 가 엔진을 재래치해
+         * 다음 전송이 hang 하지 않게 복구한다. */
         int rc = amg8833_read_frame(&s_dev);
         if (rc == AMG8833_OK) {
             memcpy(s.pixels_q2, s_dev.pixels_q2, sizeof(s.pixels_q2));

@@ -53,6 +53,18 @@ static K_MUTEX_DEFINE(s_lock);
 /* secure(0x5xxx) → non-secure(0x4xxx) alias */
 #define FLEXCOMM_NS_BASE       (DT_REG_ADDR(I2C_NODE) & ~0x10000000u)
 
+/* FlexComm I2C 엔진을 PSELID 에 (재)래치한다. PERSEL 을 같은 값(3)으로 다시
+ * 쓰면 재래치가 안 되므로 일단 none(0)으로 바꿨다가 I2C(3)로 전환한다. */
+static void i2c_bus_flexcomm_latch(void)
+{
+	CLOCK_EnableClock(kCLOCK_Flexcomm2);   /* FC2 클럭 게이트 보장 (무해) */
+	volatile uint32_t *pselid =
+		(volatile uint32_t *)(FLEXCOMM_NS_BASE + FLEXCOMM_PSELID_OFFSET);
+	uint32_t v = *pselid & ~FLEXCOMM_PERSEL_MASK;
+	*pselid = v | 0x0u;                    /* PERSEL = none (전환 유도) */
+	*pselid = v | FLEXCOMM_PERSEL_I2C;     /* PERSEL = I2C */
+}
+
 static void i2c_bus_select_once(void)
 {
 	static bool s_selected;
@@ -60,15 +72,18 @@ static void i2c_bus_select_once(void)
 		return;
 	}
 	s_selected = true;
+	i2c_bus_flexcomm_latch();
+}
 
-	CLOCK_EnableClock(kCLOCK_Flexcomm2);   /* FC2 클럭 게이트 보장 (무해) */
-	volatile uint32_t *pselid =
-		(volatile uint32_t *)(FLEXCOMM_NS_BASE + FLEXCOMM_PSELID_OFFSET);
-	uint32_t v = *pselid & ~FLEXCOMM_PERSEL_MASK;
-	/* 핵심: PERSEL 을 같은 값(3)으로 다시 쓰면 재래치가 안 된다. 일단 다른
-	 * 값(0=none)으로 바꿨다가 I2C(3)로 전환해야 엔진이 재연결된다. */
-	*pselid = v | 0x0u;                    /* PERSEL = none (전환 유도) */
-	*pselid = v | FLEXCOMM_PERSEL_I2C;     /* PERSEL = I2C */
+/* 전송 실패(NAK/timeout) 후 엔진이 wedge 되어 다음 전송이 hang(시스템 freeze)
+ * 하는 것을 막기 위해, 실패 시 엔진을 재래치하여 복구한다. 특히 AMG8833 의
+ * 128바이트 read NAK 후 다음 read 가 멈추던 문제 대응. */
+static int i2c_bus_recover_on_err(int rc)
+{
+	if (rc != 0) {
+		i2c_bus_flexcomm_latch();
+	}
+	return rc;
 }
 
 int i2c_bus_init(void)
@@ -86,7 +101,7 @@ int i2c_bus_write(uint8_t addr_7b, const uint8_t *data, size_t len)
     int rc;
     k_mutex_lock(&s_lock, K_FOREVER);
     i2c_bus_select_once();
-    rc = i2c_write(i2c_dev, data, len, addr_7b);
+    rc = i2c_bus_recover_on_err(i2c_write(i2c_dev, data, len, addr_7b));
     k_mutex_unlock(&s_lock);
     return rc;
 }
@@ -98,7 +113,7 @@ int i2c_bus_read(uint8_t addr_7b, uint8_t *data, size_t len)
     int rc;
     k_mutex_lock(&s_lock, K_FOREVER);
     i2c_bus_select_once();
-    rc = i2c_read(i2c_dev, data, len, addr_7b);
+    rc = i2c_bus_recover_on_err(i2c_read(i2c_dev, data, len, addr_7b));
     k_mutex_unlock(&s_lock);
     return rc;
 }
@@ -145,7 +160,8 @@ int i2c_bus_write_read(uint8_t addr_7b,
     int rc;
     k_mutex_lock(&s_lock, K_FOREVER);
     i2c_bus_select_once();
-    rc = i2c_write_read(i2c_dev, addr_7b, tx, tx_len, rx, rx_len);
+    rc = i2c_bus_recover_on_err(
+            i2c_write_read(i2c_dev, addr_7b, tx, tx_len, rx, rx_len));
     k_mutex_unlock(&s_lock);
     return rc;
 }
