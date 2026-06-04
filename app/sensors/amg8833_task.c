@@ -147,8 +147,8 @@ static void amg_task(void *p1, void *p2, void *p3)
             uint32_t now_ms = k_uptime_get_32();
             if ((now_ms - last_print) >= 1000u) {
                 last_print = now_ms;
-                amg_print_frame_8x8(s.pixels_q2, s.min_q2, s.max_q2,
-                                    s.avg_q2, s.thermistor_q4);
+            //    amg_print_frame_8x8(s.pixels_q2, s.min_q2, s.max_q2,
+            //                        s.avg_q2, s.thermistor_q4);
             }
         } else {
             s.err = (int8_t)rc;

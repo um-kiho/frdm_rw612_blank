@@ -87,6 +87,16 @@
 	interrupts = <16 3>;
 };
 
+/* GPIO 핀 인터럽트(PINT) 우선순위 상향: 2 → 1.
+ * A/B 로터리 엣지와 IR RX(TSDP341, GPIO18) 엣지 캡처가 WiFi/BLE ISR 지연으로
+ * 타이밍이 흔들려 Samsung AC 프레임이 깨지는 것을 줄인다. ISR 자체가 매우
+ * 짧아(타임스탬프 1회) 무선에 주는 영향은 작다. 0(최고)은 무선과 충돌 위험이라
+ * 한 단계만 올림. (IRQ 4-7,35-38 = PINT 8 라인) */
+&pint {
+	interrupts = <4 1>, <5 1>, <6 1>, <7 1>,
+		     <35 1>, <36 1>, <37 1>, <38 1>;
+};
+
 /* SCTimer: IR TX 캐리어용 SCT_OUT5(GPIO27) 사용
  * (GPIO26=SCT_OUT4는 FC3 UART TX와 충돌) */
 &sctimer {

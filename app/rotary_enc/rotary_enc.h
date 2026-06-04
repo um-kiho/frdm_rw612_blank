@@ -16,6 +16,7 @@
 #define ROTARY_ENC_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,6 +31,12 @@ int32_t rotary_enc_get_count(void);
 
 /** 카운터를 0으로 리셋 */
 void rotary_enc_reset_count(void);
+
+/** SW(푸시 버튼) 누적 누름 횟수 (디바운스 적용) */
+int32_t rotary_enc_get_sw_count(void);
+
+/** SW 가 지금 눌려있는지 (true=눌림) */
+bool rotary_enc_sw_pressed(void);
 
 #ifdef __cplusplus
 }

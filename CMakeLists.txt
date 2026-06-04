@@ -56,6 +56,7 @@ target_sources(app PRIVATE
 	app/ir/ir_codec_samsung_ac.c
 	app/ir/ir_decode.c
 	app/ir/ir_tx_zephyr.c
+	app/ir/ir_rx_nxp_gpio_ctimer.c
 
 	app/leds/led_strip_zephyr.c
 	app/leds/led_task_zephyr.c
@@ -91,5 +92,4 @@ target_sources(app PRIVATE
 #   app/ota/app_ota_http.c
 #   app/ble/gatt_servers/svc_ota.c
 #   app/ble/gatt_client/ble_central.c
-#   app/ir/ir_rx_nxp_gpio_ctimer.c
 #   app/ble/zephyr_bt_rand_shim.c

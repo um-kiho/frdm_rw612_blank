@@ -90,11 +90,13 @@ static uint8_t decode_space_bits(const ir_symbol_t *syms, size_t count,
 #define SAC_SEC_MARK    3086u
 #define SAC_SEC_SPACE   8864u
 
+/* 호출 시 syms[0] = 첫 섹션 헤더(3086/8864). (전역 헤더가 있으면 호출 측에서
+ * 건너뛰고 넘겨준다.) */
 static uint8_t decode_samsung_ac_bytes(const ir_symbol_t *syms, size_t count,
                                         uint8_t *out, uint8_t cap)
 {
     uint8_t byte_count = 0u;
-    size_t  i          = 1u;   /* syms[0] = 전역 헤더, 건너뜀 */
+    size_t  i          = 0u;   /* syms[0] = 첫 섹션 헤더 */
 
     while (i < count && byte_count < cap) {
         /* 섹션 헤더 확인 */
@@ -139,6 +141,44 @@ static uint8_t decode_samsung_ac_bytes(const ir_symbol_t *syms, size_t count,
 }
 
 /* ---------------------------------------------------------------------- *
+ * Samsung AC 섹션 독립 디코드
+ *
+ * 프레임 구조(섹션헤더로 시작): [헤더1 + 56비트 + 푸터1] = 58 심볼/섹션.
+ * 섹션 sec_index 를 심볼 오프셋 sec_index*58 에서 따로 디코드한다. 앞 섹션이
+ * 깨져도(타이밍 오류) 뒤 섹션을 독립적으로 복구할 수 있어, 리모컨 반복분에
+ * 걸쳐 섹션별로 모으면 깨진 캡처에서도 완전한 프레임을 조립할 수 있다.
+ *
+ * 반환:  1 = 성공(out[0..6] 채움)
+ *        0 = 섹션 헤더는 맞으나 비트가 깨짐(Samsung AC 이지만 이 섹션은 손상)
+ *       -1 = 그 위치에 섹션 헤더 없음(프레임이 짧거나 Samsung AC 아님)
+ * ---------------------------------------------------------------------- */
+int ir_decode_samsung_ac_section(const ir_symbol_t *syms, size_t count,
+                                 uint8_t sec_index, uint8_t out[7])
+{
+    size_t hdr = (size_t)sec_index * 58u;
+    if (syms == NULL || out == NULL || (hdr + 57u) >= count) return -1;
+    if (!in_range(syms[hdr].mark_us, SAC_SEC_MARK) ||
+        !in_range(syms[hdr].space_us, SAC_SEC_SPACE)) return -1;
+
+    uint8_t cur = 0u, bp = 0u, bc = 0u;
+    for (uint8_t k = 0u; k < 56u; ++k) {
+        const ir_symbol_t *s = &syms[hdr + 1u + k];
+        if (!in_range(s->mark_us, SAC_BIT_MARK)) return 0;
+        uint8_t bit;
+        if (in_range(s->space_us, SAC_ONE_SPACE)) {
+            bit = 1u;
+        } else if (in_range(s->space_us, SAC_ZERO_SPACE) || s->space_us == 0u) {
+            bit = 0u;
+        } else {
+            return 0;
+        }
+        cur = (uint8_t)(cur | (uint8_t)(bit << bp));
+        if (++bp == 8u) { out[bc++] = cur; cur = 0u; bp = 0u; }
+    }
+    return 1;
+}
+
+/* ---------------------------------------------------------------------- *
  * 공개 API
  * ---------------------------------------------------------------------- */
 int ir_decode(const ir_symbol_t *syms, size_t count, ir_decoded_t *out)
@@ -152,13 +192,23 @@ int ir_decode(const ir_symbol_t *syms, size_t count, ir_decoded_t *out)
     uint32_t hdr_space = syms[0].space_us;
 
     /* ── Samsung 에어컨 ─────────────────────────────────────────────── */
-    /* 헤더 mark 690 µs + space 17844 µs 조합은 매우 독특 → 최우선 판별 */
-    if (in_range(hdr_mark, 690u) && in_range(hdr_space, 17844u)) {
-        out->proto      = IR_PROTO_SAMSUNG_AC;
-        out->byte_count = decode_samsung_ac_bytes(
-                              syms, count,
-                              out->raw_bytes, IR_DECODE_MAX_RAW_BYTES);
-        return (out->byte_count > 0u) ? 0 : -2;
+    /* 두 가지 시작 형태를 모두 인식:
+     *  (a) 전역 헤더(690µs + 17844µs) + 섹션들  — syms[1] 부터 디코드
+     *  (b) 섹션 헤더(3086µs + 8864µs)로 바로 시작 — syms[0] 부터 디코드
+     * 17.8ms 의 전역헤더 space 가 수신 gap threshold(10ms)를 넘으면 캡처가
+     * 프레임을 분할해 (b) 형태(섹션헤더로 시작)로 들어온다. */
+    {
+        bool global_hdr  = in_range(hdr_mark, 690u)  && in_range(hdr_space, 17844u);
+        bool section_hdr = in_range(hdr_mark, SAC_SEC_MARK) &&
+                           in_range(hdr_space, SAC_SEC_SPACE);
+        if (global_hdr || section_hdr) {
+            const ir_symbol_t *s = global_hdr ? &syms[1] : &syms[0];
+            size_t             c = global_hdr ? (count - 1u) : count;
+            out->proto      = IR_PROTO_SAMSUNG_AC;
+            out->byte_count = decode_samsung_ac_bytes(
+                                  s, c, out->raw_bytes, IR_DECODE_MAX_RAW_BYTES);
+            return (out->byte_count > 0u) ? 0 : -2;
+        }
     }
 
     /* ── LG 에어컨 (28-bit, 헤더 8.5 ms + 4.25 ms) ──────────────── */

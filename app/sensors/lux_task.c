@@ -161,13 +161,13 @@ static void lux_task(void *p1, void *p2, void *p3)
         uint32_t now_ms = k_uptime_get_32();
         if ((now_ms - last_print) >= 1000u) {
             last_print = now_ms;
-            printf("BH1750  0x23=");
-            if (s.err1 == 0) printf("%u.%02u lx", s.lux1_x100 / 100u, s.lux1_x100 % 100u);
-            else             printf("err%d", s.err1);
-            printf("   0x5C=");
-            if (s.err2 == 0) printf("%u.%02u lx", s.lux2_x100 / 100u, s.lux2_x100 % 100u);
-            else             printf("err%d", s.err2);
-            printf("\n");
+         //   printf("BH1750  0x23=");
+         //   if (s.err1 == 0) printf("%u.%02u lx", s.lux1_x100 / 100u, s.lux1_x100 % 100u);
+         //   else             printf("err%d", s.err1);
+         //   printf("   0x5C=");
+         //   if (s.err2 == 0) printf("%u.%02u lx", s.lux2_x100 / 100u, s.lux2_x100 % 100u);
+         //   else             printf("err%d", s.err2);
+         //  printf("\n");
         }
 
         next_time += s_period_ms;

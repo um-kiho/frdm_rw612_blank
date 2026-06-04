@@ -29,6 +29,7 @@
 #ifndef APP_IR_CODEC_SAMSUNG_AC_H
 #define APP_IR_CODEC_SAMSUNG_AC_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -73,6 +74,13 @@ void ir_codec_samsung_ac_fix_checksum(uint8_t *section);
 
 /* Convenience: fix both sections of a 14-byte state buffer. */
 void ir_codec_samsung_ac_fix_checksums_14(uint8_t *state14);
+
+/* 수신 검증: 7바이트 섹션의 저장된 체크섬이 재계산값과 일치하면 true.
+ * 캡처가 깨진 프레임을 걸러낼 때 사용. */
+bool ir_codec_samsung_ac_verify(const uint8_t *section);
+
+/* len(7의 배수) 바이트의 모든 섹션 체크섬이 맞으면 true. */
+bool ir_codec_samsung_ac_verify_all(const uint8_t *data, size_t len);
 
 #ifdef __cplusplus
 }

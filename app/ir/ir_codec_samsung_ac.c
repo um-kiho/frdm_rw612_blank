@@ -58,6 +58,27 @@ void ir_codec_samsung_ac_fix_checksums_14(uint8_t *state14)
     ir_codec_samsung_ac_fix_checksum(state14 + 7);
 }
 
+bool ir_codec_samsung_ac_verify(const uint8_t *section)
+{
+    uint8_t cs     = sec_checksum(section);
+    uint8_t stored = (uint8_t)(((section[2] & 0x0Fu) << 4) |
+                               ((section[1] >> 4) & 0x0Fu));
+    return cs == stored;
+}
+
+bool ir_codec_samsung_ac_verify_all(const uint8_t *data, size_t len)
+{
+    if (data == NULL || len == 0u || (len % IR_SAC_SECTION_BYTES) != 0u) {
+        return false;
+    }
+    for (size_t s = 0; s < len; s += IR_SAC_SECTION_BYTES) {
+        if (!ir_codec_samsung_ac_verify(&data[s])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* ---------------------------------------------------------------------- *
  * Symbol-array builder
  * ---------------------------------------------------------------------- */

@@ -101,6 +101,12 @@ int ir_decode(const ir_symbol_t *syms, size_t count, ir_decoded_t *out);
 /* 프로토콜 이름 문자열 (로그/디버그용). */
 const char *ir_proto_name(ir_proto_t proto);
 
+/* Samsung AC 섹션(7바이트)을 심볼 오프셋 sec_index*58 에서 독립 디코드.
+ * 앞 섹션이 깨져도 뒤 섹션을 복구 가능 → 반복분 섹션 조립용.
+ * 반환: 1=성공(out 채움), 0=헤더 OK·비트 손상, -1=섹션헤더 없음. */
+int ir_decode_samsung_ac_section(const ir_symbol_t *syms, size_t count,
+                                 uint8_t sec_index, uint8_t out[7]);
+
 #ifdef __cplusplus
 }
 #endif

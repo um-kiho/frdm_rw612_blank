@@ -26,6 +26,10 @@
 #include "tcp/app_tcp_client.h"
 #include "lux_task.h"
 #include "amg8833_task.h"
+#include "rotary_enc.h"
+#include "ir_rx.h"
+#include "ir_decode.h"
+#include "ir_codec_samsung_ac.h"
 #if defined(CONFIG_APP_AUDIO_ES8388)
 #include "audio_player.h"
 #endif
@@ -200,6 +204,62 @@ static void radar_rx_cb(const uint8_t *data, size_t len, void *user_arg)
 	LOG_DBG("radar UART rx %u bytes", (unsigned)len);
 	/* TODO: process radar UART data here */
 	(void)data;
+}
+
+/* ── IR 수신 콜백 (시스템 워크큐에서 호출) ───────────────────────────────────
+ * 캡처가 부하로 매 프레임 일부만 디코드되므로, Samsung AC 는 리모컨 반복분에
+ * 걸쳐 "체크섬 통과한 7바이트 섹션"을 인덱스별로 수집한다. 3섹션(21B)이 다
+ * 모이면 완성 프레임으로 1회 보고 → 한 번 눌러도 안정적으로 풀 코드 획득. */
+static void ir_rx_frame_cb(const ir_symbol_t *syms, size_t count, void *user)
+{
+	ARG_UNUSED(user);
+
+	static uint8_t s_sec[3][7];   /* 인덱스별 누적 섹션 */
+	static bool    s_have[3];
+
+	/* 섹션0 헤더가 없으면 Samsung AC 아님 → NEC/LG 시도 */
+	uint8_t tmp[7];
+	if (ir_decode_samsung_ac_section(syms, count, 0, tmp) < 0) {
+		ir_decoded_t dec;
+		if (ir_decode(syms, count, &dec) == 0 &&
+		    dec.proto != IR_PROTO_SAMSUNG_AC) {
+			printf("IR RX: %s addr=0x%04X cmd=0x%02X bits=%u%s\n",
+			       ir_proto_name(dec.proto), dec.address, dec.command,
+			       dec.bit_count, dec.repeat ? " (repeat)" : "");
+		}
+		return;
+	}
+
+	/* Samsung AC: 각 섹션을 오프셋 0/58/116 에서 독립 디코드 → 체크섬 통과분만
+	 * 인덱스별 누적. 3섹션 다 모이면 보고.
+	 * TODO(다음 세션): 버튼 전환 시 섹션0 손상 프레임에서 이전 버튼 sec0 + 새
+	 * 버튼 sec2 가 섞일 수 있음. "섹션0 앵커"는 수신율을 떨어뜨려서 보류. 대신
+	 * 타임아웃 리셋(예: 마지막 수집 후 300ms 무수집 시 누적 클리어) 등으로 보완. */
+	for (uint8_t s = 0; s < 3u; ++s) {
+		if (ir_decode_samsung_ac_section(syms, count, s, tmp) != 1) {
+			continue;
+		}
+		if (!ir_codec_samsung_ac_verify(tmp)) {
+			continue;
+		}
+		if (s == 0u && s_have[0] && memcmp(tmp, s_sec[0], 7u) != 0) {
+			s_have[1] = false;   /* 다른 버튼 → 뒤 섹션 누적 리셋 */
+			s_have[2] = false;
+		}
+		memcpy(s_sec[s], tmp, 7u);
+		s_have[s] = true;
+	}
+
+	if (s_have[0] && s_have[1] && s_have[2]) {
+		printf("IR RX: Samsung AC (21B):");
+		for (uint8_t s = 0; s < 3u; ++s) {
+			for (uint8_t i = 0; i < 7u; ++i) {
+				printf(" %02X", s_sec[s][i]);
+			}
+		}
+		printf("\n");
+		s_have[0] = s_have[1] = s_have[2] = false;
+	}
 }
 
 #if defined(CONFIG_BT_CLASSIC)
@@ -405,6 +465,23 @@ void app_main_task(void *arg)
 	printf("APP: sensors disabled — enable CONFIG_APP_SENSORS_ENABLE when connected\n");
 #endif
 
+	/* EC16 로터리 엔코더 (GPIO4=A, GPIO5=B) — 핀 구성 + ANY_EDGE 인터럽트.
+	 * gpio_pin_configure_dt(GPIO_INPUT) 가 DT 의 GPIO_PULL_UP 까지 적용한다. */
+	if (rotary_enc_init() != 0) {
+		LOG_WRN("rotary_enc_init failed");
+		printf("APP: rotary init failed\n");
+	} else {
+		printf("APP: rotary encoder ready (GPIO4/5)\n");
+	}
+
+	/* IR 수신 (TSDP341, GPIO18 active-low) — 프레임 캡처 → 디코드 콜백 */
+	ir_rx_set_callback(ir_rx_frame_cb, NULL);
+	if (ir_rx_init() == 0 && ir_rx_start() == 0) {
+		printf("APP: IR RX started (GPIO18 TSDP341)\n");
+	} else {
+		printf("APP: IR RX init/start failed\n");
+	}
+
 	LOG_INF("Starting BLE stack (bt_enable)...");
 	printf("APP: calling bt_enable...\n");
 	ret = bt_enable(bt_ready_cb);
@@ -424,6 +501,22 @@ void app_main_task(void *arg)
 
 		led_state = !led_state;
 		blink_count++;
+
+		/* 로터리 카운트/버튼 변화 출력 (ISR 누적값을 1초마다 폴링) */
+		{
+			static int32_t s_last_rot = 0;
+			static int32_t s_last_sw  = 0;
+			int32_t rot = rotary_enc_get_count();
+			int32_t sw  = rotary_enc_get_sw_count();
+			if (rot != s_last_rot) {
+				printf("ROT: count=%d (delta=%d)\n", rot, rot - s_last_rot);
+				s_last_rot = rot;
+			}
+			if (sw != s_last_sw) {
+				printf("ROT: SW press count=%d\n", sw);
+				s_last_sw = sw;
+			}
+		}
 
 		if (s_ble_ready) {
 			uint32_t uptime_s = (uint32_t)(k_uptime_get() / 1000LL);
