@@ -7,10 +7,30 @@
 #include "i2c_bus.h"
 
 #include <string.h>
+#include <stdio.h>
 #include <zephyr/kernel.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(amg_task, LOG_LEVEL_INF);
+
+/* 8x8 픽셀 온도를 8행 x 8열 그리드로 콘솔에 출력 (°C, 소수 1자리).
+ * pixels_q2 는 Q2 고정소수(0.25°C/LSB) → 0.1°C 단위 = q2 * 5 / 2. */
+static void amg_print_frame_8x8(const int16_t *px, int16_t min_q2, int16_t max_q2,
+                                int16_t avg_q2, int16_t therm_q4)
+{
+    printf("AMG 8x8 (C)  min=%d.%d max=%d.%d avg=%d.%d  amb=%d.%02d\n",
+           min_q2 / 4, (min_q2 < 0 ? -min_q2 : min_q2) % 4 * 25,
+           max_q2 / 4, (max_q2 < 0 ? -max_q2 : max_q2) % 4 * 25,
+           avg_q2 / 4, (avg_q2 < 0 ? -avg_q2 : avg_q2) % 4 * 25,
+           therm_q4 / 16, (therm_q4 < 0 ? -therm_q4 : therm_q4) % 16 * 100 / 16);
+    for (int r = 0; r < 8; ++r) {
+        for (int c = 0; c < 8; ++c) {
+            int t10 = ((int)px[r * 8 + c] * 5) / 2;   /* 0.1°C 단위 */
+            printf("%4d.%d", t10 / 10, (t10 < 0 ? -t10 : t10) % 10);
+        }
+        printf("\n");
+    }
+}
 
 #ifndef AMG_TASK_STACK
 #define AMG_TASK_STACK          4096   /* read_frame()이 128B 프레임 버퍼를 스택에 잡음 */
@@ -106,6 +126,7 @@ static void amg_task(void *p1, void *p2, void *p3)
         return;
     }
     LOG_INF("AMG8833 ready (addr=0x%02X)", s_addr);
+    uint32_t last_print = 0u;
 
     while (s_running) {
         amg_sample_t s;
@@ -121,6 +142,14 @@ static void amg_task(void *p1, void *p2, void *p3)
             (void)amg8833_read_thermistor(&s_dev);
             s.thermistor_q4 = s_dev.thermistor_q4;
             s.err           = 0;
+
+            /* 8x8 온도 그리드 출력 (약 1초마다 — 콘솔 과부하 방지) */
+            uint32_t now_ms = k_uptime_get_32();
+            if ((now_ms - last_print) >= 1000u) {
+                last_print = now_ms;
+                amg_print_frame_8x8(s.pixels_q2, s.min_q2, s.max_q2,
+                                    s.avg_q2, s.thermistor_q4);
+            }
         } else {
             s.err = (int8_t)rc;
         }

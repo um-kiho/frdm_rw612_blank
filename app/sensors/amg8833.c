@@ -12,6 +12,13 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(amg8833, LOG_LEVEL_INF);
 
+/* 프레임 읽기 청크 크기(바이트). 기본 = 128 → 한 번에 읽기.
+ * 버스 간섭(다른 센서 영향)이 문제가 되면 16/32 등으로 줄여 분할 읽기로
+ * 전환할 수 있다 (값만 바꾸면 됨). AMG8833_FRAME_BYTES 의 약수여야 함. */
+#ifndef AMG_READ_CHUNK
+#define AMG_READ_CHUNK   AMG8833_FRAME_BYTES
+#endif
+
 static int wr_reg(amg8833_t *dev, uint8_t reg, uint8_t val)
 {
     uint8_t buf[2] = { reg, val };
@@ -81,11 +88,15 @@ int amg8833_read_frame(amg8833_t *dev)
 {
     if (dev == NULL) return AMG8833_ERR_PARAM;
 
-    uint8_t reg = AMG8833_REG_T01L;
     uint8_t raw[AMG8833_FRAME_BYTES];
 
-    if (i2c_bus_write_read(dev->addr, &reg, 1u, raw, sizeof(raw)) != 0) {
-        return AMG8833_ERR_IO;
+    /* AMG_READ_CHUNK 단위로 읽는다. 기본 128 = 한 번에 읽기. 청크 사이에는
+     * i2c_bus mutex 가 풀려 다른 센서가 끼어들 수 있다(분할 시 버스 간섭 완화). */
+    for (size_t off = 0; off < AMG8833_FRAME_BYTES; off += AMG_READ_CHUNK) {
+        uint8_t reg = (uint8_t)(AMG8833_REG_T01L + off);
+        if (i2c_bus_write_read(dev->addr, &reg, 1u, &raw[off], AMG_READ_CHUNK) != 0) {
+            return AMG8833_ERR_IO;
+        }
     }
 
     for (int i = 0; i < AMG8833_PIXELS; ++i) {

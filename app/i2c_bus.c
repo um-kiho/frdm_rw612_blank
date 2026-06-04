@@ -145,11 +145,6 @@ int i2c_bus_probe(uint8_t addr_7b)
     return (rc == 0) ? 0 : -ENODEV;
 }
 
-void i2c_bus_force_unlock(void)
-{
-    k_mutex_init(&s_lock);
-}
-
 int i2c_bus_write_read(uint8_t addr_7b,
                        const uint8_t *tx, size_t tx_len,
                        uint8_t       *rx, size_t rx_len)

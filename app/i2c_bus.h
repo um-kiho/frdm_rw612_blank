@@ -53,10 +53,6 @@ int i2c_bus_write_read(uint8_t addr_7b,
  * 장치가 ACK를 보내면 0, NACK(없음)이면 -ENODEV 반환. */
 int  i2c_bus_probe        (uint8_t addr_7b);
 
-/* k_thread_abort() 후 뮤텍스가 잠긴 채 남은 경우 강제 재초기화.
- * 워치독 핸들러에서만 호출. */
-void i2c_bus_force_unlock (void);
-
 #ifdef __cplusplus
 }
 #endif

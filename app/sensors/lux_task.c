@@ -9,6 +9,7 @@
 #include "i2c_bus.h"
 
 #include <string.h>
+#include <stdio.h>
 #include <zephyr/kernel.h>
 
 #include <zephyr/logging/log.h>
@@ -143,7 +144,10 @@ static void lux_task(void *p1, void *p2, void *p3)
         LOG_WRN("BH1750 not found (rc=%d)", init_rc);
     }
 
+    uint32_t last_print = 0u;
+
     while (s_running) {
+
         lux_sample_t s = {0};
 
         s.err1 = (int8_t)bh1750_read_lux_x100(&s_s1, &s.lux1_x100);
@@ -153,6 +157,19 @@ static void lux_task(void *p1, void *p2, void *p3)
 
         publish(&s);
 
+        /* 1초 주기로 두 채널 조도 출력 (0x23, 0x5C) */
+        uint32_t now_ms = k_uptime_get_32();
+        if ((now_ms - last_print) >= 1000u) {
+            last_print = now_ms;
+            printf("BH1750  0x23=");
+            if (s.err1 == 0) printf("%u.%02u lx", s.lux1_x100 / 100u, s.lux1_x100 % 100u);
+            else             printf("err%d", s.err1);
+            printf("   0x5C=");
+            if (s.err2 == 0) printf("%u.%02u lx", s.lux2_x100 / 100u, s.lux2_x100 % 100u);
+            else             printf("err%d", s.err2);
+            printf("\n");
+        }
+
         next_time += s_period_ms;
         uint32_t now = k_uptime_get_32();
         if ((int32_t)(next_time - now) < 1) {
@@ -160,6 +177,7 @@ static void lux_task(void *p1, void *p2, void *p3)
              * → CPU 독점. 일정을 리셋해 항상 최소 한 주기를 sleep 한다. */
             next_time = now + s_period_ms;
         }
+
         k_sleep(K_TIMEOUT_ABS_MS(next_time));
     }
 }

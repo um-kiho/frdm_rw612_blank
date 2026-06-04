@@ -446,7 +446,7 @@ void app_main_task(void *arg)
 
 		/* 30초마다 전체 스레드 스택 사용량 출력 */
 		if ((blink_count % 30u) == 0u) {
-			app_main_dump_stacks();
+		//	app_main_dump_stacks();
 		}
 
 		k_msleep(APP_MAIN_PERIOD_MS);
