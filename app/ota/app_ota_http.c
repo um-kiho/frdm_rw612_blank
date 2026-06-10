@@ -389,11 +389,11 @@ static int stream_fixed_body(byte_stream_t *bs, sink_ctx_t *sink,
                              uint32_t body_total)
 {
     static uint8_t rxbuf[APP_OTA_HTTP_RX_CHUNK];
-    uint32_t seen = 0u;
+    uint32_t seen        = 0u;
+    uint32_t last_logged = 0u;
+    const uint32_t log_step = 64u * 1024u;
     s_dl_seen  = 0u;
     s_dl_total = body_total;
-    /* 핫패스 로깅 없음: 99% hang의 원인이 막판 버스트 구간의 과다 deferred 로그였다.
-     * 진행률은 ota_heartbeat_task가 5초마다 s_dl_seen으로 보고한다. */
     LOG_INF("body stream begin total=%u", (unsigned)body_total);
     while (seen < body_total) {
         if (!s_running) return -1;
@@ -413,8 +413,12 @@ static int stream_fixed_body(byte_stream_t *bs, sink_ctx_t *sink,
         }
         seen += (uint32_t)got;
         s_dl_seen = seen;
-        /* Yield to let WiFi/TCP RX work. Without this the OTA task can starve
-         * the network stack and the download stalls mid-stream. */
+        if (seen - last_logged >= log_step || seen == body_total) {
+            LOG_INF("progress %u/%u (%u%%)",
+                   (unsigned)seen, (unsigned)body_total,
+                   (unsigned)((uint64_t)seen * 100u / body_total));
+            last_logged = seen;
+        }
         k_yield();
     }
     LOG_INF("body stream complete %u B", (unsigned)seen);

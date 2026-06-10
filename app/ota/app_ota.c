@@ -15,6 +15,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/sys/reboot.h>
 
@@ -168,10 +169,26 @@ int app_ota_chunk(uint32_t offset, const void *data, size_t len)
         return APP_OTA_ERR_PARAM;
     }
 
+    /* printk is routed directly to the console (CONFIG_LOG_PRINTK=n in
+     * prj.conf), so these markers survive even when the log buffer is
+     * saturated. Rate-limit to ~one line per 16 KiB to keep the UART quiet. */
+    static uint32_t s_last_marker;
+    bool emit = (offset == 0u) ||
+                (offset / (16u * 1024u)) != (s_last_marker / (16u * 1024u));
+    if (emit) {
+        printk("OTA-W: off=%u len=%u BEFORE\n",
+               (unsigned)offset, (unsigned)len);
+    }
     int rc = flash_area_write(s_upload_fa, (off_t)offset, data, len);
+    if (emit) {
+        printk("OTA-W: off=%u len=%u AFTER rc=%d\n",
+               (unsigned)offset, (unsigned)len, rc);
+        s_last_marker = offset;
+    }
     if (rc < 0) {
-        LOG_ERR("flash_area_write failed at off=%u len=%u: %d",
-                (unsigned)offset, (unsigned)len, rc);
+        printk("OTA-W: off=%u len=%u FAIL rc=%d\n",
+               (unsigned)offset, (unsigned)len, rc);
+        LOG_ERR("flash_area_write failed: %d", rc);
         s_st.state    = APP_OTA_STATE_FAILED;
         s_st.last_err = APP_OTA_ERR_WRITE_FAILED;
         rc = APP_OTA_ERR_WRITE_FAILED;
@@ -264,6 +281,14 @@ void app_ota_reboot_after_ms(uint32_t delay_ms)
 {
     static K_THREAD_STACK_DEFINE(reboot_task_stack, APP_OTA_REBOOT_TASK_STACK);
     static struct k_thread reboot_task_data;
+    /* Idempotent: app_ota_commit() and the HTTP auto-commit path both request a
+     * reboot. Recreating the same static k_thread while the first reboot thread
+     * is still sleeping corrupts it, so the board never actually reboots. Latch
+     * the first request and ignore the rest. */
+    static atomic_t s_reboot_scheduled = ATOMIC_INIT(0);
+    if (atomic_set(&s_reboot_scheduled, 1) != 0) {
+        return;
+    }
     k_thread_create(&reboot_task_data, reboot_task_stack,
                     K_THREAD_STACK_SIZEOF(reboot_task_stack),
                     reboot_task, (void *)(uintptr_t)delay_ms, NULL, NULL,
