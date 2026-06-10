@@ -16,3 +16,4 @@ manifest:
           - mbedtls
           - tf-psa-crypto
           - libsbc
+          - mcuboot

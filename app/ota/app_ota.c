@@ -18,6 +18,9 @@
 #include <zephyr/sys/atomic.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/sys/reboot.h>
+#if defined(CONFIG_IMG_MANAGER)
+#include <zephyr/dfu/mcuboot.h>
+#endif
 
 #include "fsl_common.h"
 
@@ -225,6 +228,24 @@ int app_ota_commit(const uint8_t *header, size_t header_len)
     }
 
     int rc = APP_OTA_OK;
+
+#if defined(CONFIG_IMG_MANAGER)
+    /* Mark slot1 (image-1) for upgrade so MCUboot swaps it into slot0 on the
+     * next boot. PERMANENT = keep the new image (no revert).
+     * NOTE: the downloaded payload MUST be the *signed* image
+     * (zephyr.signed.bin). MCUboot validates the slot1 image signature before
+     * swapping; an unsigned/mismatched image is rejected and the old image
+     * boots again. */
+    int up = boot_request_upgrade(BOOT_UPGRADE_PERMANENT);
+    if (up != 0) {
+        LOG_ERR("boot_request_upgrade failed: %d", up);
+        s_st.state    = APP_OTA_STATE_FAILED;
+        s_st.last_err = APP_OTA_ERR_COMMIT_FAILED;
+        emit_status_locked_unlock();
+        return APP_OTA_ERR_COMMIT_FAILED;
+    }
+    LOG_INF("boot upgrade requested (image-1 -> image-0 on reboot)");
+#endif
 
     s_st.state    = APP_OTA_STATE_COMMITTED;
     s_st.last_err = APP_OTA_OK;

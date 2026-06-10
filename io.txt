@@ -1571,3 +1571,6 @@ curl.exe -o t.bin http://192.168.0.64:8080/firmware/zephyr.bin
 (.venv) PS C:\work\New_zCube\rw612_zephyr\frdm_rw612_blank> 
 
 OTA:http://192.168.0.64:8080/firmware/zephyr.bin --commit
+
+
+cd

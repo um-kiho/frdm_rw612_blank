@@ -18,6 +18,7 @@ REM BT Classic (A2DP) requires mbedtls, tf-psa-crypto, and libsbc modules.
 REM Download them on first use - runs only once, skipped on subsequent builds.
 if not exist "modules\crypto\mbedtls" goto DO_UPDATE
 if not exist "modules\crypto\tf-psa-crypto" goto DO_UPDATE
+if not exist "bootloader\mcuboot" goto DO_UPDATE
 goto SKIP_UPDATE
 :DO_UPDATE
 echo [build.bat] Required modules missing. Running: west update
