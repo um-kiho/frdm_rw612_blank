@@ -27,11 +27,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <errno.h>
 #include <zephyr/kernel.h>
 
-#include "lwip/sockets.h"
-#include "lwip/netdb.h"
-#include "lwip/inet.h"
+#include <zephyr/net/socket.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ota_http, LOG_LEVEL_INF);
@@ -85,20 +84,19 @@ static int parse_url(const char *url, url_parts_t *out)
 static int resolve_host(const char *host, struct sockaddr_in *out)
 {
     out->sin_family = AF_INET;
-    if (inet_aton(host, &out->sin_addr) != 0) return 0;
-    struct hostent *he = lwip_gethostbyname(host);
-    if (he == NULL || he->h_addr_list == NULL || he->h_addr_list[0] == NULL) {
-        return -1;
+    if (zsock_inet_pton(AF_INET, host, &out->sin_addr) == 1) {
+        return 0;
     }
-    memcpy(&out->sin_addr, he->h_addr_list[0], sizeof(out->sin_addr));
-    return 0;
+
+    LOG_ERR("host '%s' is not a numeric IPv4 address", host);
+    return -1;
 }
 
 static int send_all(int s, const void *buf, size_t len)
 {
     const uint8_t *p = (const uint8_t *)buf;
     while (len > 0u) {
-        int n = lwip_send(s, p, len, 0);
+        int n = zsock_send(s, p, len, 0);
         if (n <= 0) return -1;
         p   += n;
         len -= (size_t)n;
@@ -266,6 +264,13 @@ typedef struct byte_stream {
     size_t         pre_off;
 } byte_stream_t;
 
+/* Module state is referenced by the stream helpers below, so declare it here.
+ * The storage definition remains later in the file with the other module state. */
+static volatile bool                  s_running;
+static volatile app_ota_http_state_t  s_state;
+static volatile uint32_t              s_dl_seen;   /* live byte counter (diagnostics) */
+static volatile uint32_t              s_dl_total;  /* live total bytes (diagnostics) */
+
 static int bs_read_some(byte_stream_t *s, uint8_t *out, size_t want, size_t *got)
 {
     if (s->pre_off < s->pre_len) {
@@ -276,7 +281,7 @@ static int bs_read_some(byte_stream_t *s, uint8_t *out, size_t want, size_t *got
         *got = take;
         return 0;
     }
-    int n = lwip_recv(s->sock, out, (int)want, 0);
+    int n = zsock_recv(s->sock, out, (int)want, 0);
     if (n <= 0) return -1;
     *got = (size_t)n;
     return 0;
@@ -385,6 +390,11 @@ static int stream_fixed_body(byte_stream_t *bs, sink_ctx_t *sink,
 {
     static uint8_t rxbuf[APP_OTA_HTTP_RX_CHUNK];
     uint32_t seen = 0u;
+    s_dl_seen  = 0u;
+    s_dl_total = body_total;
+    /* 핫패스 로깅 없음: 99% hang의 원인이 막판 버스트 구간의 과다 deferred 로그였다.
+     * 진행률은 ota_heartbeat_task가 5초마다 s_dl_seen으로 보고한다. */
+    LOG_INF("body stream begin total=%u", (unsigned)body_total);
     while (seen < body_total) {
         if (!s_running) return -1;
         size_t want = body_total - seen;
@@ -395,9 +405,19 @@ static int stream_fixed_body(byte_stream_t *bs, sink_ctx_t *sink,
                    (unsigned)seen, (unsigned)body_total);
             return -2;
         }
-        if (sink_write(sink, rxbuf, got) != 0) return -3;
+        int wrc = sink_write(sink, rxbuf, got);
+        if (wrc != 0) {
+            LOG_ERR("sink_write failed at %u (+%u) rc=%d",
+                   (unsigned)seen, (unsigned)got, wrc);
+            return -3;
+        }
         seen += (uint32_t)got;
+        s_dl_seen = seen;
+        /* Yield to let WiFi/TCP RX work. Without this the OTA task can starve
+         * the network stack and the download stalls mid-stream. */
+        k_yield();
     }
+    LOG_INF("body stream complete %u B", (unsigned)seen);
     return 0;
 }
 
@@ -447,12 +467,6 @@ static int stream_chunked_body(byte_stream_t *bs, sink_ctx_t *sink)
     }
 }
 
-/* ------------------------------------------------------------------------- *
- * Module state
- * ------------------------------------------------------------------------- */
-static volatile bool                  s_running;
-static volatile app_ota_http_state_t  s_state;
-
 static char    s_image_url [APP_OTA_HTTP_URL_MAX + 1];
 static char    s_header_url[APP_OTA_HTTP_URL_MAX + 1];
 static bool    s_has_header_url;
@@ -496,22 +510,28 @@ static int http_request_once(http_req_t *r)
     if (parse_url(r->url, &u) != 0)        return -1;
 
     memset(&addr, 0, sizeof(addr));
-    addr.sin_port = lwip_htons(u.port);
+    addr.sin_port = htons(u.port);
     if (resolve_host(u.host, &addr) != 0)  return -2;
 
     s_state = APP_OTA_HTTP_CONNECTING;
-    sock = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sock < 0) return -3;
+    LOG_INF("connect %s:%u path=%s", u.host, u.port, u.path);
+    sock = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock < 0) {
+        LOG_ERR("socket() failed errno=%d", errno);
+        return -3;
+    }
 
     struct timeval tv;
     tv.tv_sec  = (APP_OTA_HTTP_RECV_TIMEOUT_MS / 1000);
     tv.tv_usec = (APP_OTA_HTTP_RECV_TIMEOUT_MS % 1000) * 1000;
-    (void)lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    (void)lwip_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    (void)zsock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    (void)zsock_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    if (lwip_connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+    if (zsock_connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        LOG_ERR("connect %s:%u failed errno=%d", u.host, u.port, errno);
         rc = -4; goto out;
     }
+    LOG_INF("connected");
 
     s_state = APP_OTA_HTTP_REQUESTING;
     int n;
@@ -534,16 +554,24 @@ static int http_request_once(http_req_t *r)
                      u.path, u.host);
     }
     if (n <= 0 || (size_t)n >= sizeof(hdrbuf)) { rc = -5; goto out; }
-    if (send_all(sock, hdrbuf, (size_t)n) != 0) { rc = -6; goto out; }
+    if (send_all(sock, hdrbuf, (size_t)n) != 0) {
+        LOG_ERR("send request failed errno=%d", errno);
+        rc = -6; goto out;
+    }
+    LOG_INF("request sent (%d B), waiting response", n);
 
     /* Read until \r\n\r\n. */
     size_t hdr_filled = 0;
     int    parsed     = -1;
     while (parsed == -1) {
         if (hdr_filled >= sizeof(hdrbuf)) { rc = -7; goto out; }
-        int got = lwip_recv(sock, hdrbuf + hdr_filled,
+        int got = zsock_recv(sock, hdrbuf + hdr_filled,
                             sizeof(hdrbuf) - hdr_filled, 0);
-        if (got <= 0) { rc = -8; goto out; }
+        if (got <= 0) {
+            LOG_ERR("recv response failed got=%d errno=%d filled=%u",
+                    got, errno, (unsigned)hdr_filled);
+            rc = -8; goto out;
+        }
         hdr_filled += (size_t)got;
         parsed = parse_response_headers(hdrbuf, hdr_filled, &r->rsp);
         if (parsed < -1) { rc = -9; goto out; }
@@ -601,7 +629,7 @@ static int http_request_once(http_req_t *r)
     rc = 0;
 
 out:
-    if (sock >= 0) lwip_close(sock);
+    if (sock >= 0) zsock_close(sock);
     return rc;
 }
 
@@ -613,10 +641,13 @@ static int http_request(http_req_t *r)
     size_t ulen = strlen(r->url);
     if (ulen > APP_OTA_HTTP_URL_MAX) return -1;
     memcpy(working_url, r->url, ulen + 1);
-    r->url = working_url;
 
     for (unsigned hop = 0; hop <= APP_OTA_HTTP_MAX_REDIRECTS; ++hop) {
-        int rc = http_request_once(r);
+        http_req_t req = *r;
+        req.url = working_url;
+
+        int rc = http_request_once(&req);
+        r->rsp = req.rsp;
         if (rc == 0)  return 0;
         if (rc != 1)  return rc;
         /* redirect */
@@ -703,9 +734,40 @@ static int image_pre_stream(const http_response_t *rsp,
 /* ------------------------------------------------------------------------- *
  * The download task
  * ------------------------------------------------------------------------- */
-static void http_task(void *arg)
+static void ota_heartbeat_task(void *p1, void *p2, void *p3)
 {
-    (void)arg;
+    (void)p1; (void)p2; (void)p3;
+    uint32_t last_seen = 0u;
+    uint32_t same_count = 0u;
+    while (1) {
+        k_sleep(K_SECONDS(5));
+        if (!s_running) {
+            last_seen  = 0u;
+            same_count = 0u;
+            continue;
+        }
+        uint32_t seen  = s_dl_seen;
+        uint32_t total = s_dl_total;
+        /* 5초마다 진행률/정지 보고 (per-chunk 로그를 없앤 대신 이게 진행률 소스). */
+        if (seen == last_seen) {
+            same_count++;
+            LOG_WRN("HB: state=%d seen=%u/%u STALL (%u x5s)",
+                    (int)s_state, (unsigned)seen, (unsigned)total,
+                    (unsigned)same_count);
+        } else {
+            LOG_INF("HB: state=%d seen=%u/%u",
+                    (int)s_state, (unsigned)seen, (unsigned)total);
+            same_count = 0u;
+        }
+        last_seen = seen;
+    }
+}
+
+static void http_task(void *p1, void *p2, void *p3)
+{
+    (void)p1;
+    (void)p2;
+    (void)p3;
 
     /* Stage 1: image.bin */
     app_ota_status_t st;
@@ -731,7 +793,13 @@ static void http_task(void *arg)
     req.pre_cb     = image_pre_stream;
     req.pre_arg    = &ipa;
 
-    if (http_request(&req) != 0) goto fail;
+    int img_rc = http_request(&req);
+    if (img_rc != 0) {
+        LOG_ERR("image download failed rc=%d state=%d",
+                img_rc, (int)s_state);
+        goto fail;
+    }
+    LOG_INF("image download ok, bytes=%u", (unsigned)img_sink.ota_offset);
 
     /* Stage 2: optional signed-image header.bin */
     size_t header_len = 0u;
@@ -791,6 +859,20 @@ int app_ota_http_start(const app_ota_http_opts_t *opts)
     if (opts == NULL || opts->image_url == NULL) return -1;
     if (s_running)                                return -2;
 
+    /* Ensure the OTA storage backend is initialized exactly once. The BLE
+     * OTA service also calls this when it is built; app_ota_init is
+     * idempotent, so calling it here covers builds that do not include
+     * svc_ota (e.g. TCP-only OTA trigger). */
+    static bool s_ota_core_inited = false;
+    if (!s_ota_core_inited) {
+        int irc = app_ota_init(NULL, NULL);
+        if (irc != 0) {
+            LOG_ERR("app_ota_init failed rc=%d", irc);
+            return -10;
+        }
+        s_ota_core_inited = true;
+    }
+
     url_parts_t tmp;
     if (parse_url(opts->image_url, &tmp) != 0) return -3;
 
@@ -812,6 +894,22 @@ int app_ota_http_start(const app_ota_http_opts_t *opts)
     s_auto_commit = opts->auto_commit;
     s_running     = true;
     s_state       = APP_OTA_HTTP_RESOLVING;
+
+    /* Diagnostics heartbeat: an independent low-priority thread that prints
+     * the live byte counter every 5 s. If the main OTA task is blocked in
+     * recv()/flash_area_write(), the byte counter freezes but this thread
+     * keeps logging, so we can tell hang-in-syscall from total system hang. */
+    static K_THREAD_STACK_DEFINE(ota_hb_stack, 768);
+    static struct k_thread ota_hb_data;
+    static bool s_hb_started = false;
+    if (!s_hb_started) {
+        k_thread_create(&ota_hb_data, ota_hb_stack,
+                        K_THREAD_STACK_SIZEOF(ota_hb_stack),
+                        ota_heartbeat_task, NULL, NULL, NULL,
+                        9, 0, K_NO_WAIT);
+        k_thread_name_set(&ota_hb_data, "ota_hb");
+        s_hb_started = true;
+    }
 
     static K_THREAD_STACK_DEFINE(http_task_stack, APP_OTA_HTTP_TASK_STACK);
     static struct k_thread http_task_data;
@@ -847,3 +945,113 @@ app_ota_http_state_t app_ota_http_get_state(void)
 {
     return s_state;
 }
+
+/* ------------------------------------------------------------------------- *
+ * Zephyr shell commands
+ *
+ *   ota start <image_url> [--commit]   - HTTP pull OTA (auto-commit if --commit)
+ *   ota start <image_url> <header_url> - HTTP pull OTA with signed header.bin
+ *   ota stop                           - abort running download
+ *   ota status                         - print current state/progress
+ *
+ * Example:
+ *   ota start http://172.28.176.1:8080/firmware/zephyr.bin --commit
+ * ------------------------------------------------------------------------- */
+#ifdef CONFIG_SHELL
+#include <zephyr/shell/shell.h>
+
+static const char * const s_state_name[] = {
+    "IDLE", "RESOLVING", "CONNECTING", "REQUESTING",
+    "DOWNLOADING", "HEADER_DL", "COMMITTING", "DONE", "FAILED",
+};
+
+static int cmd_ota_start(const struct shell *sh, size_t argc, char **argv)
+{
+    /* argv[1] = image_url
+     * argv[2] = header_url  OR  "--commit"  (optional)
+     * argv[3] = "--commit"                  (optional, when argv[2] is header) */
+    if (argc < 2) {
+        shell_error(sh, "usage: ota start <image_url> [<header_url>] [--commit]");
+        shell_error(sh, "  e.g. ota start http://172.28.176.1:8080/firmware/zephyr.bin --commit");
+        return -EINVAL;
+    }
+
+    if (app_ota_http_is_running()) {
+        shell_warn(sh, "OTA already running (state=%s). Use 'ota stop' first.",
+                   s_state_name[app_ota_http_get_state()]);
+        return -EBUSY;
+    }
+
+    app_ota_http_opts_t opts;
+    opts.image_url   = argv[1];
+    opts.header_url  = NULL;
+    opts.auto_commit = false;
+
+    for (size_t i = 2; i < (size_t)argc; ++i) {
+        if (strcmp(argv[i], "--commit") == 0) {
+            opts.auto_commit = true;
+        } else {
+            opts.header_url = argv[i];
+        }
+    }
+
+    shell_print(sh, "OTA start: %s%s%s auto_commit=%s",
+                opts.image_url,
+                opts.header_url ? "  header=" : "",
+                opts.header_url ? opts.header_url : "",
+                opts.auto_commit ? "yes" : "no");
+
+    int rc = app_ota_http_start(&opts);
+    if (rc != 0) {
+        shell_error(sh, "app_ota_http_start failed (%d)", rc);
+        return rc;
+    }
+    shell_print(sh, "Download started.");
+    return 0;
+}
+
+static int cmd_ota_stop(const struct shell *sh, size_t argc, char **argv)
+{
+    (void)argc; (void)argv;
+    app_ota_http_stop();
+    shell_print(sh, "OTA stop requested.");
+    return 0;
+}
+
+static int cmd_ota_status(const struct shell *sh, size_t argc, char **argv)
+{
+    (void)argc; (void)argv;
+    app_ota_status_t st;
+    app_ota_get_status(&st);
+
+    app_ota_http_state_t hs = app_ota_http_get_state();
+    const char *hs_name = (hs < (app_ota_http_state_t)ARRAY_SIZE(s_state_name))
+                          ? s_state_name[hs] : "?";
+
+    static const char * const s_ota_state_name[] = {
+        "IDLE", "READY", "WRITING", "COMMITTED", "FAILED",
+    };
+    const char *os_name = (st.state < ARRAY_SIZE(s_ota_state_name))
+                          ? s_ota_state_name[st.state] : "?";
+
+    shell_print(sh, "HTTP state : %s (%s)",
+                hs_name, app_ota_http_is_running() ? "running" : "idle");
+    shell_print(sh, "OTA  state : %s  err=%u", os_name, (unsigned)st.last_err);
+    shell_print(sh, "Progress   : %u / %u bytes",
+                (unsigned)st.bytes_received, (unsigned)st.total_size);
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_ota,
+    SHELL_CMD_ARG(start, NULL,
+        "Start HTTP OTA\n"
+        "  ota start <image_url> [<header_url>] [--commit]\n"
+        "  e.g. ota start http://172.28.176.1:8080/firmware/zephyr.bin --commit",
+        cmd_ota_start, 2, 3),
+    SHELL_CMD(stop,   NULL, "Abort running OTA download", cmd_ota_stop),
+    SHELL_CMD(status, NULL, "Print OTA state and progress", cmd_ota_status),
+    SHELL_SUBCMD_SET_END
+);
+
+SHELL_CMD_REGISTER(ota, &sub_ota, "OTA firmware update commands", NULL);
+#endif /* CONFIG_SHELL */

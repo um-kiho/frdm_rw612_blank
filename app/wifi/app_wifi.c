@@ -134,6 +134,22 @@ static void retry_work_fn(struct k_work *w)
     start_connect_timeout();
 }
 
+/* 대량 전송(OTA 등) 중 WiFi 파워세이브가 켜져 있으면 AP가 버퍼링→DTIM 주기로
+ * 묶어 보내며 수십~수백 ms 단위 정지가 발생한다. 연결 직후 PS를 끈다. */
+static void disable_power_save(void)
+{
+    struct wifi_ps_params params = { 0 };
+    params.type    = WIFI_PS_PARAM_STATE;
+    params.enabled = WIFI_PS_DISABLED;
+
+    int ret = net_mgmt(NET_REQUEST_WIFI_PS, s_iface, &params, sizeof(params));
+    if (ret != 0) {
+        LOG_WRN("Failed to disable WiFi power save (ret=%d)", ret);
+    } else {
+        LOG_INF("WiFi power save disabled");
+    }
+}
+
 static void log_connection_status(void)
 {
     struct wifi_iface_status st = { 0 };
@@ -214,6 +230,7 @@ static void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb,
             cancel_connect_timeout();
             LOG_INF("WiFi connected");
             s_connected = true;
+            disable_power_save();
             log_connection_status();
         }
         break;

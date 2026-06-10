@@ -22,16 +22,17 @@
 
 LOG_MODULE_REGISTER(app_ir_aircon, LOG_LEVEL_INF);
 
-/* IRSamsungAc::sendOn / sendOff payloads (21 bytes = 3 sections). */
+/* 실측 리모컨 코드 (2026-06-05). 섹션2가 내장 기본값과 다름 — 사용자 에어컨 전용.
+ * (섹션0/1 은 기존과 동일.) */
 static const uint8_t k_samsung_ac_on_21[] = {
     0x02, 0x92, 0x0F, 0x00, 0x00, 0x00, 0xF0,
     0x01, 0xD2, 0x0F, 0x00, 0x00, 0x00, 0x00,
-    0x01, 0xE2, 0xFE, 0x71, 0x80, 0x11, 0xF0,
+    0x01, 0x52, 0x0F, 0x00, 0x20, 0x11, 0xF8,
 };
 static const uint8_t k_samsung_ac_off_21[] = {
     0x02, 0xB2, 0x0F, 0x00, 0x00, 0x00, 0xC0,
     0x01, 0xD2, 0x0F, 0x00, 0x00, 0x00, 0x00,
-    0x01, 0x02, 0xFF, 0x71, 0x80, 0x11, 0xC0,
+    0x01, 0x72, 0x0F, 0x00, 0x20, 0x11, 0xC8,
 };
 /* Steady-state 14-byte frame derived from sections 1 and 3 of on_21 -
  * this is what IRSamsungAc::send() emits after the initial power-on. */
@@ -39,7 +40,37 @@ static const uint8_t k_samsung_ac_on_14[] = {
     0x02, 0x92, 0x0F, 0x00, 0x00, 0x00, 0xF0,
     0x01, 0xE2, 0xFE, 0x71, 0x80, 0x11, 0xF0,
 };
-
+#if 0
+/* Learned-button fallback path used temporarily by rotary switch sequence.
+ * Names are kept stable to match field-debug notes. */
+static const uint8_t s_samsung_ac_learned_on_7[] = {
+    0x02, 0x92, 0x0F, 0x00, 0x00, 0x00, 0x00,
+};
+static const uint8_t s_samsung_ac_learned_temp_up_7[] = {
+    0x01, 0xE2, 0xFE, 0x71, 0x90, 0x11, 0x00,
+};
+static const uint8_t s_samsung_ac_learned_temp_down_7[] = {
+    0x01, 0xE2, 0xFE, 0x71, 0x70, 0x11, 0x00,
+};
+static const uint8_t s_samsung_ac_learned_off_14[] = {
+    0x02, 0xB2, 0x0F, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x72, 0x0F, 0x00, 0x20, 0x11, 0x00,
+};
+#endif
+/* 캡처 기반 Samsung AC 패턴 (사용자 로그 2026-06-08) */
+static const uint8_t s_samsung_ac_learned_off_14[] = {
+    0x01, 0xC2, 0x0F, 0x00, 0x00, 0x20, 0x00,
+    0x01, 0x02, 0xFF, 0x01, 0x80, 0x1F, 0xC0,
+};
+static const uint8_t s_samsung_ac_learned_on_7[] = {
+    0x01, 0xE2, 0xFE, 0x01, 0x60, 0x1B, 0xF0,
+};
+static const uint8_t s_samsung_ac_learned_temp_up_7[] = {
+    0x01, 0xD2, 0xFE, 0x01, 0x70, 0x1B, 0xF0,
+};
+static const uint8_t s_samsung_ac_learned_temp_down_7[] = {
+    0x01, 0xE2, 0xFE, 0x01, 0x50, 0x1B, 0xF0,
+};
 /* Temperature is the high nibble of byte index 11 (5th byte of section 2,
  * = (°C - 16) -> 16°C → 0x0 ... 30°C → 0xE).
  * After the nibble is touched, both section checksums must be rewritten. */
@@ -88,12 +119,22 @@ static int samsung_send_state_with_temp_locked(uint8_t temp_c)
     return send_symbol_frame(s_sam14, sizeof(s_sam14));
 }
 
-static int exec_samsung(ir_aircon_action_t action)
+static int send_learned_raw(const uint8_t *frame, size_t len)
+{
+    if (frame == NULL) return IR_AIRCON_ERR_INVALID_ARG;
+    if (len == 0u || (len % 7u) != 0u || len > IR_SAC_MAX_BYTES)
+        return IR_AIRCON_ERR_INVALID_ARG;
+
+    return send_symbol_frame(frame, len);
+}
+
+static int exec_samsung_learned(ir_aircon_action_t action)
 {
     int rc;
     switch (action) {
     case IR_AIRCON_ACTION_POWER_ON:
-        rc = send_symbol_frame(k_samsung_ac_on_21, sizeof(k_samsung_ac_on_21));
+        rc = send_learned_raw(s_samsung_ac_learned_on_7,
+                              sizeof(s_samsung_ac_learned_on_7));
         if (rc == IR_AIRCON_OK) {
             memcpy(s_sam14, k_samsung_ac_on_14, sizeof(s_sam14));
             s_sam_power = true;
@@ -101,21 +142,19 @@ static int exec_samsung(ir_aircon_action_t action)
         return rc;
 
     case IR_AIRCON_ACTION_POWER_OFF:
-        rc = send_symbol_frame(k_samsung_ac_off_21, sizeof(k_samsung_ac_off_21));
+        rc = send_learned_raw(s_samsung_ac_learned_off_14,
+                              sizeof(s_samsung_ac_learned_off_14));
         if (rc == IR_AIRCON_OK) s_sam_power = false;
         return rc;
 
     case IR_AIRCON_ACTION_TEMP_UP:
-    case IR_AIRCON_ACTION_TEMP_DOWN: {
-        if (!s_sam_power) return IR_AIRCON_ERR_INVALID_STATE;
-        uint8_t t = samsung_get_temp_c_locked();
-        if (action == IR_AIRCON_ACTION_TEMP_UP) {
-            if (t < IR_AIRCON_SAMSUNG_TEMP_MAX_C) t++;
-        } else {
-            if (t > IR_AIRCON_SAMSUNG_TEMP_MIN_C) t--;
-        }
-        return samsung_send_state_with_temp_locked(t);
-    }
+        return send_learned_raw(s_samsung_ac_learned_temp_up_7,
+                                sizeof(s_samsung_ac_learned_temp_up_7));
+
+    case IR_AIRCON_ACTION_TEMP_DOWN:
+        return send_learned_raw(s_samsung_ac_learned_temp_down_7,
+                                sizeof(s_samsung_ac_learned_temp_down_7));
+
     default:
         return IR_AIRCON_ERR_INVALID_ARG;
     }
@@ -153,7 +192,7 @@ int ir_aircon_send(ir_aircon_brand_t brand, ir_aircon_action_t action)
     int rc;
     switch (brand) {
     case IR_AIRCON_BRAND_SAMSUNG:
-        rc = exec_samsung(action);
+        rc = exec_samsung_learned(action);
         break;
     case IR_AIRCON_BRAND_LG:
     case IR_AIRCON_BRAND_CARRIER_KR:

@@ -10,6 +10,7 @@ cd /d "%~dp0.."
 
 set BOARD=frdm_rw612
 set SRC_DIR=frdm_rw612_blank
+set PROJECT_NAME=frdm_rw612_blank
 set ZEPHYR_TOOLCHAIN_VARIANT=zephyr
 set ZEPHYR_SDK_INSTALL_DIR=C:\Users\User\zephyr-sdk-1.0.1
 
@@ -32,10 +33,10 @@ echo [build.bat] Modules downloaded successfully.
 REM Determine build directory from second argument (default: debug)
 if /i "%2"=="release" (
     set BUILD_DIR=frdm_rw612_blank/release
-    set EXTRA_CMAKE=-DCONFIG_SIZE_OPTIMIZATIONS=y -DCONFIG_LOG_DEFAULT_LEVEL=0
+    set EXTRA_CMAKE=-DPROJECT_NAME=%PROJECT_NAME% -DCONFIG_SIZE_OPTIMIZATIONS=y -DCONFIG_LOG_DEFAULT_LEVEL=0
 ) else (
     set BUILD_DIR=frdm_rw612_blank/debug
-    set EXTRA_CMAKE=
+    set EXTRA_CMAKE=-DPROJECT_NAME=%PROJECT_NAME%
 )
 
 REM Check command line argument
@@ -52,7 +53,7 @@ goto END
 :CONFIGURE
 echo Configuring [%BUILD_DIR%]...
 if "%EXTRA_CMAKE%"=="" (
-    west build -b %BOARD% -d %BUILD_DIR% --cmake-only %SRC_DIR%
+    west build -b %BOARD% -d %BUILD_DIR% --cmake-only %SRC_DIR% -DPROJECT_NAME=%PROJECT_NAME%
 ) else (
     west build -b %BOARD% -d %BUILD_DIR% --cmake-only %SRC_DIR% -- %EXTRA_CMAKE%
 )
@@ -61,7 +62,7 @@ goto END
 :BUILD
 echo Building [%BUILD_DIR%]...
 if "%EXTRA_CMAKE%"=="" (
-    west build -b %BOARD% -d %BUILD_DIR% %SRC_DIR%
+    west build -b %BOARD% -d %BUILD_DIR% %SRC_DIR% -DPROJECT_NAME=%PROJECT_NAME%
 ) else (
     west build -b %BOARD% -d %BUILD_DIR% %SRC_DIR% -- %EXTRA_CMAKE%
 )

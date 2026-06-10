@@ -2,34 +2,26 @@
  * Copyright 2026 zCube
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * Thin wrapper over NXP wireless-framework OtaSupport. Drives the slot1
- * staging area and lets multiple transports (BLE / TCP / ...) feed image
- * bytes through one serialised state machine.
+ * Thin OTA storage backend for Zephyr.
  *
- * NXP API used (from middleware/wireless/framework/OtaSupport/Interface/OtaSupport.h):
- *
- *   uint8_t      OTA_ClientInit       (void);
- *   otaResult_t  OTA_StartImage       (uint32_t length);
- *   otaResult_t  OTA_PushImageChunk   (uint8_t *data, uint16_t length,
- *                                      uint32_t *pImageOffset,
- *                                      uint16_t *pImageLength);
- *   otaResult_t  OTA_CommitImage      (uint8_t *pHeader);
- *   void         OTA_CancelImage      (void);
- *
- * gOtaSuccess_c == 0 in the same header.
+ * This module writes OTA payloads into the MCUboot secondary slot via the
+ * Zephyr flash_img API and then requests an upgrade on commit. The higher
+ * layers keep using the same transport-agnostic begin/chunk/commit flow.
  */
 
 #include "app_ota.h"
 
 #include <string.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/storage/flash_map.h>
+#include <zephyr/sys/reboot.h>
 
-#include "fsl_common.h"          /* NVIC_SystemReset */
+#include "fsl_common.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(app_ota, LOG_LEVEL_INF);
-
-#include "OtaSupport.h"
 
 #ifndef APP_OTA_REBOOT_TASK_STACK
 #define APP_OTA_REBOOT_TASK_STACK   1024
@@ -40,6 +32,13 @@ static volatile bool        s_inited;
 static app_ota_status_t     s_st;
 static app_ota_status_cb_t  s_cb;
 static void                *s_cb_arg;
+static bool                  s_img_ready;
+static uint8_t               s_upload_slot;
+static const struct flash_area *s_upload_fa;
+
+#if !DT_NODE_EXISTS(DT_NODELABEL(slot1_partition))
+#error "slot1_partition is required for OTA upload target"
+#endif
 
 /* ------------------------------------------------------------------------- */
 static void emit_status_locked_unlock(void)
@@ -51,9 +50,32 @@ static void emit_status_locked_unlock(void)
     if (s_cb != NULL) s_cb(&snap, s_cb_arg);
 }
 
-static int map_ota(otaResult_t r)
+static int ota_prepare_storage(uint32_t total_size)
 {
-    return (r == gOtaSuccess_c) ? APP_OTA_OK : APP_OTA_ERR_WRITE_FAILED;
+    int rc = flash_area_open(s_upload_slot, &s_upload_fa);
+    if (rc != 0 || s_upload_fa == NULL) {
+        LOG_ERR("flash_area_open(slot=%u) failed: %d", (unsigned)s_upload_slot, rc);
+        return APP_OTA_ERR_WRITE_FAILED;
+    }
+
+    if (total_size > s_upload_fa->fa_size) {
+        size_t slot_size = s_upload_fa->fa_size;
+        flash_area_close(s_upload_fa);
+        s_upload_fa = NULL;
+        LOG_ERR("image too large: %u > %u", (unsigned)total_size, (unsigned)slot_size);
+        return APP_OTA_ERR_PARAM;
+    }
+
+    rc = flash_area_erase(s_upload_fa, 0, s_upload_fa->fa_size);
+    if (rc != 0) {
+        flash_area_close(s_upload_fa);
+        s_upload_fa = NULL;
+        LOG_ERR("flash_area_erase failed: %d", rc);
+        return APP_OTA_ERR_WRITE_FAILED;
+    }
+
+    s_img_ready = true;
+    return APP_OTA_OK;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -66,10 +88,7 @@ int app_ota_init(app_ota_status_cb_t cb, void *user_arg)
     }
 
     if (!s_inited) {
-        if (OTA_ClientInit() != 0u) {
-            LOG_ERR("OTA_ClientInit failed");
-            return APP_OTA_ERR_INIT_FAILED;
-        }
+        s_upload_slot = FIXED_PARTITION_ID(slot1_partition);
         s_inited = true;
     }
 
@@ -79,6 +98,8 @@ int app_ota_init(app_ota_status_cb_t cb, void *user_arg)
     memset(&s_st, 0, sizeof(s_st));
     s_st.state    = APP_OTA_STATE_IDLE;
     s_st.last_err = APP_OTA_OK;
+    s_img_ready   = false;
+    s_upload_fa   = NULL;
     k_mutex_unlock(&s_lock);
 
     LOG_INF("ready");
@@ -91,20 +112,18 @@ int app_ota_begin(uint32_t total_size)
     if (total_size == 0u) return APP_OTA_ERR_PARAM;
 
     k_mutex_lock(&s_lock, K_FOREVER);
-
-    /* Restart cleanly if a previous session was left mid-way. */
-    if (s_st.state == APP_OTA_STATE_READY   ||
-        s_st.state == APP_OTA_STATE_WRITING ||
-        s_st.state == APP_OTA_STATE_FAILED) {
-        OTA_CancelImage();
+    if (s_upload_fa != NULL) {
+        flash_area_close(s_upload_fa);
+        s_upload_fa = NULL;
     }
+    s_img_ready         = false;
+    s_st.bytes_received  = 0u;
+    s_st.total_size      = 0u;
 
-    otaResult_t r = OTA_StartImage(total_size);
-    int rc;
-    if (r != gOtaSuccess_c) {
+    int rc = ota_prepare_storage(total_size);
+    if (rc != APP_OTA_OK) {
         s_st.state     = APP_OTA_STATE_FAILED;
-        s_st.last_err  = APP_OTA_ERR_WRITE_FAILED;
-        rc = APP_OTA_ERR_WRITE_FAILED;
+        s_st.last_err  = (uint8_t)rc;
     } else {
         s_st.state          = APP_OTA_STATE_READY;
         s_st.last_err       = APP_OTA_OK;
@@ -122,6 +141,7 @@ int app_ota_chunk(uint32_t offset, const void *data, size_t len)
     if (!s_inited)                return APP_OTA_ERR_INVALID_STATE;
     if (data == NULL || len == 0u) return APP_OTA_ERR_PARAM;
     if (len > UINT16_MAX)         return APP_OTA_ERR_PARAM;
+    if (!s_img_ready)             return APP_OTA_ERR_INVALID_STATE;
 
     k_mutex_lock(&s_lock, K_FOREVER);
 
@@ -148,29 +168,28 @@ int app_ota_chunk(uint32_t offset, const void *data, size_t len)
         return APP_OTA_ERR_PARAM;
     }
 
-    uint32_t pos  = offset;
-    uint16_t wrote = 0;
-    otaResult_t r = OTA_PushImageChunk((uint8_t *)data, (uint16_t)len,
-                                       &pos, &wrote);
-    int rc;
-    if (r != gOtaSuccess_c) {
+    int rc = flash_area_write(s_upload_fa, (off_t)offset, data, len);
+    if (rc < 0) {
+        LOG_ERR("flash_area_write failed at off=%u len=%u: %d",
+                (unsigned)offset, (unsigned)len, rc);
         s_st.state    = APP_OTA_STATE_FAILED;
         s_st.last_err = APP_OTA_ERR_WRITE_FAILED;
         rc = APP_OTA_ERR_WRITE_FAILED;
     } else {
-        s_st.bytes_received += (wrote != 0u) ? wrote : (uint32_t)len;
+        s_st.bytes_received += (uint32_t)len;
         s_st.state           = APP_OTA_STATE_WRITING;
         s_st.last_err        = APP_OTA_OK;
         rc = APP_OTA_OK;
-    }
-    emit_status_locked_unlock();
+    }    emit_status_locked_unlock();
     return rc;
 }
 
 int app_ota_commit(const uint8_t *header, size_t header_len)
 {
-    (void)header_len;
     if (!s_inited) return APP_OTA_ERR_INVALID_STATE;
+    if (!s_img_ready) return APP_OTA_ERR_INVALID_STATE;
+    (void)header;
+    (void)header_len;
 
     k_mutex_lock(&s_lock, K_FOREVER);
 
@@ -181,25 +200,21 @@ int app_ota_commit(const uint8_t *header, size_t header_len)
     }
     if (s_st.total_size != 0u &&
         s_st.bytes_received != s_st.total_size) {
-        /* NXP OTA_CommitImage will reject too, but bail earlier with a
-         * descriptive error so the client can resume. */
+        /* The image is incomplete, so keep the staged payload and let the
+         * client resume instead of rebooting. */
         s_st.last_err = APP_OTA_ERR_INVALID_OFFSET;
         emit_status_locked_unlock();
         return APP_OTA_ERR_INVALID_OFFSET;
     }
 
-    otaResult_t r = OTA_CommitImage((uint8_t *)header);
-    int rc = map_ota(r);
-    if (rc == APP_OTA_OK) {
-        s_st.state    = APP_OTA_STATE_COMMITTED;
-        s_st.last_err = APP_OTA_OK;
-    } else {
-        s_st.state    = APP_OTA_STATE_FAILED;
-        s_st.last_err = APP_OTA_ERR_COMMIT_FAILED;
-        rc = APP_OTA_ERR_COMMIT_FAILED;
-    }
-    LOG_INF("commit rc=%d", rc);
+    int rc = APP_OTA_OK;
+
+    s_st.state    = APP_OTA_STATE_COMMITTED;
+    s_st.last_err = APP_OTA_OK;
+    LOG_INF("commit ok");
     emit_status_locked_unlock();
+
+    app_ota_reboot_after_ms(800u);
     return rc;
 }
 
@@ -207,11 +222,15 @@ void app_ota_abort(void)
 {
     if (!s_inited) return;
     k_mutex_lock(&s_lock, K_FOREVER);
-    OTA_CancelImage();
     s_st.state          = APP_OTA_STATE_IDLE;
     s_st.last_err       = APP_OTA_ERR_ABORTED;
     s_st.bytes_received = 0u;
     s_st.total_size     = 0u;
+    if (s_upload_fa != NULL) {
+        flash_area_close(s_upload_fa);
+        s_upload_fa = NULL;
+    }
+    s_img_ready         = false;
     LOG_INF("aborted");
     emit_status_locked_unlock();
 }
@@ -225,14 +244,20 @@ void app_ota_get_status(app_ota_status_t *out)
 }
 
 /* ------------------------------------------------------------------------- */
-static void reboot_task(void *arg)
+static void reboot_task(void *p1, void *p2, void *p3)
 {
-    uint32_t delay_ms = (uint32_t)(uintptr_t)arg;
+    (void)p2;
+    (void)p3;
+    uint32_t delay_ms = (uint32_t)(uintptr_t)p1;
     if (delay_ms > 0u) {
         k_sleep(K_MSEC(delay_ms));
     }
     LOG_INF("reboot now");
+#if defined(CONFIG_REBOOT)
+    sys_reboot(SYS_REBOOT_COLD);
+#else
     NVIC_SystemReset();
+#endif
 }
 
 void app_ota_reboot_after_ms(uint32_t delay_ms)

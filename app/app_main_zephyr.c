@@ -30,9 +30,9 @@
 #include "ir_rx.h"
 #include "ir_decode.h"
 #include "ir_codec_samsung_ac.h"
-#if defined(CONFIG_APP_AUDIO_ES8388)
+#include "ir_aircon.h"
 #include "audio_player.h"
-#endif
+#include "app_ota_http.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -46,11 +46,16 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/printk.h>
 
 LOG_MODULE_REGISTER(app_main, LOG_LEVEL_DBG);
 
 #define APP_MAIN_PERIOD_MS 1000
 #define LED0_NODE DT_ALIAS(led0)
+#define RADAR_RX_DROP_FIRST_BYTES 1u
+#define RADAR_RX_WARMUP_MS       120u
+#define RADAR_HEX_DUMP_ENABLE    1   /* 0으로 바꾸면 HEX 덤프 출력 비활성 */
+#define RADAR_HEX_DUMP_MAX_BYTES 64u  /* 콘솔 지연 방지: 콜백당 출력 바이트 제한 */
 
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 
@@ -73,7 +78,7 @@ static void prov_connect_work_fn(struct k_work *w)
 {
 	ARG_UNUSED(w);
 	if (app_nvram_load(&s_nvram_cfg) == APP_NVRAM_OK) {
-		LOG_INF("NVRAM loaded — connecting WiFi ssid=[%s]", s_nvram_cfg.ssid);
+		LOG_INF("NVRAM loaded - connecting WiFi ssid=[%s]", s_nvram_cfg.ssid);
 		printf("APP: connecting wifi ssid=[%s]\n", s_nvram_cfg.ssid);
 		app_wifi_connect(&s_nvram_cfg);
 	} else {
@@ -93,6 +98,70 @@ static void tcp_rx_cb(const uint8_t *data, size_t len, void *user_arg)
 {
 	ARG_UNUSED(user_arg);
 	LOG_INF("TCP rx %u bytes", (unsigned)len);
+	printf("APP: TCP rx %u bytes\n", (unsigned)len);
+
+	if (len == 0u || data == NULL) {
+		printf("APP: TCP rx ignored (empty payload)\n");
+		return;
+	}
+
+	printf("APP: TCP rx processing start\n");
+
+	/* OTA trigger via TCP
+	 * Format: "OTA:<image_url>"           - download only (manual commit)
+	 *         "OTA:<image_url> --commit"   - download + auto commit + reboot
+	 * Example:
+	 *   OTA:http://172.28.176.1:8080/firmware/zephyr.bin --commit
+	 */
+	if (len > 4 && strncmp((const char *)data, "OTA:", 4) == 0) {
+		printf("APP: TCP rx detected OTA command\n");
+		/* Copy to a NUL-terminated buffer, strip trailing CR/LF */
+		static char s_ota_cmd[APP_OTA_HTTP_URL_MAX + 16];
+		size_t copy_len = (len < sizeof(s_ota_cmd) - 1u)
+		                  ? len : sizeof(s_ota_cmd) - 1u;
+		memcpy(s_ota_cmd, data, copy_len);
+		s_ota_cmd[copy_len] = '\0';
+		/* Strip trailing whitespace / CRLF */
+		for (int i = (int)copy_len - 1; i >= 0 && (s_ota_cmd[i] == '\r'
+		     || s_ota_cmd[i] == '\n' || s_ota_cmd[i] == ' '); --i) {
+			s_ota_cmd[i] = '\0';
+		}
+
+		/* Split "OTA:<url>" or "OTA:<url> --commit" */
+		char *url_start = s_ota_cmd + 4;  /* skip "OTA:" */
+		bool  auto_commit = false;
+		char *space = strchr(url_start, ' ');
+		if (space != NULL) {
+			*space = '\0';
+			if (strcmp(space + 1, "--commit") == 0) {
+				auto_commit = true;
+			}
+		}
+
+		printf("APP: OTA auto_commit=%s\n", auto_commit ? "true" : "false");
+
+		if (app_ota_http_is_running()) {
+			LOG_WRN("OTA already running - ignoring TCP trigger");
+			printf("APP: OTA already running -> ignore\n");
+			return;
+		}
+
+		printf("APP: OTA start request -> app_ota_http_start()\n");
+
+		app_ota_http_opts_t opts = {
+			.image_url   = url_start,
+			.header_url  = NULL,
+			.auto_commit = auto_commit,
+		};
+		int rc = app_ota_http_start(&opts);
+		LOG_INF("OTA TCP trigger: url=%s commit=%d rc=%d",
+		        url_start, (int)auto_commit, rc);
+		printf("APP: OTA start result rc=%d\n", rc);
+		printf("APP: TCP rx processing done\n");
+	} else {
+		printf("APP: TCP rx not OTA command -> no action\n");
+		printf("APP: TCP rx processing done\n");
+	}
 }
 
 static void wifi_cb(app_wifi_evt_t evt, void *user_arg)
@@ -102,17 +171,17 @@ static void wifi_cb(app_wifi_evt_t evt, void *user_arg)
 	switch (evt) {
 	case APP_WIFI_EVT_READY:
 		if (app_nvram_is_valid(&s_nvram_cfg)) {
-			LOG_INF("WiFi ready — connecting ssid=[%s]", s_nvram_cfg.ssid);
-			printf("APP: wifi ready — connecting\n");
+			LOG_INF("WiFi ready - connecting ssid=[%s]", s_nvram_cfg.ssid);
+			printf("APP: wifi ready - connecting\n");
 			app_wifi_connect(&s_nvram_cfg);
 		} else {
-			LOG_INF("WiFi ready — no credentials, waiting for provisioning");
+			LOG_INF("WiFi ready - no credentials, waiting for provisioning");
 			printf("APP: wifi ready, no credentials\n");
 		}
 		break;
 
 	case APP_WIFI_EVT_CONNECTED:
-		LOG_INF("WiFi connected — starting TCP client");
+		LOG_INF("WiFi connected - starting TCP client");
 		printf("APP: wifi connected, starting TCP\n");
 		if (app_tcp_client_start(&s_nvram_cfg, tcp_rx_cb, NULL) != 0) {
 			LOG_ERR("TCP client start failed");
@@ -120,7 +189,7 @@ static void wifi_cb(app_wifi_evt_t evt, void *user_arg)
 		break;
 
 	case APP_WIFI_EVT_DISCONNECTED:
-		LOG_WRN("WiFi disconnected — stopping TCP client");
+		LOG_WRN("WiFi disconnected - stopping TCP client");
 		printf("APP: wifi disconnected\n");
 		app_tcp_client_stop();
 		s_prov_applied = false;
@@ -144,7 +213,7 @@ static void prov_cb(app_prov_evt_t evt, void *user_arg)
 
 	switch (evt) {
 	case APP_PROV_EVT_COMMIT_OK:
-		/* Defer to system workq — calling net_mgmt from BT RX WQ overflows its stack */
+		/* Defer to system workq - calling net_mgmt from BT RX WQ overflows its stack */
 		k_work_submit(&s_prov_connect_work);
 		break;
 
@@ -200,10 +269,30 @@ void app_main_led_manual_override(uint32_t hold_s)
 
 static void radar_rx_cb(const uint8_t *data, size_t len, void *user_arg)
 {
+	/* 출력 제한(64B): "RADAR[NNN]: " + "XX "*64 + " ..." + '\0' */
+	static char s_hex_buf[256];
+
 	ARG_UNUSED(user_arg);
-	LOG_DBG("radar UART rx %u bytes", (unsigned)len);
-	/* TODO: process radar UART data here */
-	(void)data;
+
+	if (len < 5u) {
+		return;
+	}
+
+#if RADAR_HEX_DUMP_ENABLE
+	/* 콜백에서 과도한 printk를 피하기 위해 일부만 덤프 */
+	size_t dump_len = (len > RADAR_HEX_DUMP_MAX_BYTES) ? RADAR_HEX_DUMP_MAX_BYTES : len;
+	int pos = snprintk(s_hex_buf, sizeof(s_hex_buf), "RADAR[%u]:", (unsigned)len);
+	for (size_t i = 0u; i < dump_len; ++i) {
+		pos += snprintk(s_hex_buf + pos, (int)sizeof(s_hex_buf) - pos,
+				" %02X", data[i]);
+	}
+	if (dump_len < len) {
+		(void)snprintk(s_hex_buf + pos, (int)sizeof(s_hex_buf) - pos, " ...");
+	}
+	printk("%s\n", s_hex_buf);
+#else
+	ARG_UNUSED(s_hex_buf);
+#endif
 }
 
 /* ── IR 수신 콜백 (시스템 워크큐에서 호출) ───────────────────────────────────
@@ -291,7 +380,7 @@ static void ble_disconnected_cb(struct bt_conn *conn, uint8_t reason)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 	LOG_INF("BLE disconnected addr=[%s] reason=0x%02X", addr, reason);
-	printf("APP: BLE disconnected reason=0x%02X — restarting adv\n", reason);
+	printf("APP: BLE disconnected reason=0x%02X - restarting adv\n", reason);
 
 	/* disconnect 후 광고 재시작 → 재접속 허용 */
 	int rc = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1,
@@ -320,7 +409,7 @@ static void bt_ready_cb(int err)
 	LOG_INF("BLE stack ready");
 	printf("APP: BLE stack ready\n");
 
-	/* 광고를 먼저 시작 — 서비스 init 실패와 무관하게 장치 이름이 보임 */
+	/* Start advertising first - device name remains visible even if service init fails */
 	err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1,
 			      s_ad, ARRAY_SIZE(s_ad), NULL, 0);
 	if (err != 0) {
@@ -342,8 +431,6 @@ static void bt_ready_cb(int err)
 	(void)app_ctrl_init(ctrl_cb, NULL);
 	printf("APP: svc-init: ir\n");
 	(void)app_ir_svc_init();
-	printf("APP: svc-init: radar\n");
-	(void)app_radar_start(radar_rx_cb, NULL);
 
 	printf("APP: svc-init: led_svc\n");
 	(void)app_led_svc_init();
@@ -382,12 +469,12 @@ static void bt_ready_cb(int err)
 			s_nvram_cfg.security, s_nvram_cfg.host_ip,
 			s_nvram_cfg.port);
 	} else {
-		LOG_WRN("No valid NVRAM — WiFi will not auto-connect");
+		LOG_WRN("No valid NVRAM - WiFi will not auto-connect");
 		printf("APP: no nvram credentials, waiting for provisioning\n");
 	}
 
 	/* app_wifi_connect() is deferred to wifi_cb(APP_WIFI_EVT_READY),
-	 * which fires only after NET_EVENT_IF_UP — i.e. NXP firmware loaded. */
+	 * which fires only after NET_EVENT_IF_UP - i.e. NXP firmware loaded. */
 	printf("APP: svc-init: wifi\n");
 	if (app_wifi_init(wifi_cb, NULL) != 0) {
 		LOG_ERR("WiFi init failed");
@@ -407,6 +494,7 @@ void app_main_task(void *arg)
 
 	LOG_INF("=== zCubeTarget boot ===");
 	printf("APP: app_main_task started\n");
+	printk("START\n");
 
 	if (!gpio_is_ready_dt(&led)) {
 		LOG_ERR("led0 not ready");
@@ -447,7 +535,7 @@ void app_main_task(void *arg)
 	/* === GPIO PIN TEST END === */
 #endif
 	/* I2C 센서: 하드웨어 연결 후 활성화
-	 * BH1750 (0x23), AMG8833 (0x69, ADDR=HIGH) — FC2 I2C (GPIO16/17)
+	 * BH1750 (0x23), AMG8833 (0x69, ADDR=HIGH) - FC2 I2C (GPIO16/17)
 	 * 미연결 상태에서 활성화 시 I2C 버스 hang 발생 */
 #if defined(CONFIG_APP_SENSORS_ENABLE)
 	if (lux_task_start(500, NULL, NULL) != 0) {
@@ -462,10 +550,10 @@ void app_main_task(void *arg)
 	}
 #else
 	LOG_INF("Sensors disabled (CONFIG_APP_SENSORS_ENABLE not set)");
-	printf("APP: sensors disabled — enable CONFIG_APP_SENSORS_ENABLE when connected\n");
+	printf("APP: sensors disabled - enable CONFIG_APP_SENSORS_ENABLE when connected\n");
 #endif
 
-	/* EC16 로터리 엔코더 (GPIO4=A, GPIO5=B) — 핀 구성 + ANY_EDGE 인터럽트.
+	/* EC16 rotary encoder (GPIO4=A, GPIO5=B) - pin config + ANY_EDGE interrupt.
 	 * gpio_pin_configure_dt(GPIO_INPUT) 가 DT 의 GPIO_PULL_UP 까지 적용한다. */
 	if (rotary_enc_init() != 0) {
 		LOG_WRN("rotary_enc_init failed");
@@ -474,12 +562,31 @@ void app_main_task(void *arg)
 		printf("APP: rotary encoder ready (GPIO4/5)\n");
 	}
 
-	/* IR 수신 (TSDP341, GPIO18 active-low) — 프레임 캡처 → 디코드 콜백 */
+	/* IR RX (TSDP341, GPIO18 active-low) - frame capture -> decode callback */
 	ir_rx_set_callback(ir_rx_frame_cb, NULL);
 	if (ir_rx_init() == 0 && ir_rx_start() == 0) {
 		printf("APP: IR RX started (GPIO18 TSDP341)\n");
 	} else {
 		printf("APP: IR RX init/start failed\n");
+	}
+
+	/* Radar UART(FC0): BLE 준비와 무관하게 먼저 시작해서 RX 콘솔 확인 가능 */
+	{
+		static const char s_radar_start_msg[] = "START\r\n";
+		int rrc;
+		printf("APP: svc-init: radar\n");
+		rrc = app_radar_start(radar_rx_cb, NULL);
+		if (rrc != 0) {
+			printf("APP: radar start failed rc=%d\n", rrc);
+		} else {
+			printf("APP: radar started\n");
+			rrc = app_radar_send(s_radar_start_msg, sizeof(s_radar_start_msg) - 1u);
+			if (rrc != 0) {
+				printf("APP: radar start msg send failed rc=%d\n", rrc);
+			} else {
+				printf("APP: radar start msg sent on FC0\n");
+			}
+		}
 	}
 
 	LOG_INF("Starting BLE stack (bt_enable)...");
@@ -513,8 +620,33 @@ void app_main_task(void *arg)
 				s_last_rot = rot;
 			}
 			if (sw != s_last_sw) {
-				printf("ROT: SW press count=%d\n", sw);
 				s_last_sw = sw;
+				/* SW 4-step sequence: 1=ON, 2=TEMP_UP, 3=TEMP_DOWN, 4=OFF */
+				int seq = sw % 4;
+				ir_aircon_action_t action;
+				const char *action_name;
+				switch (seq) {
+				case 1:
+					action = IR_AIRCON_ACTION_POWER_ON;
+					action_name = "POWER_ON";
+					break;
+				case 2:
+					action = IR_AIRCON_ACTION_TEMP_UP;
+					action_name = "TEMP_UP";
+					break;
+				case 3:
+					action = IR_AIRCON_ACTION_TEMP_DOWN;
+					action_name = "TEMP_DOWN";
+					break;
+				default:
+					action = IR_AIRCON_ACTION_POWER_OFF;
+					action_name = "POWER_OFF";
+					break;
+				}
+
+				int trc = ir_aircon_send(IR_AIRCON_BRAND_SAMSUNG, action);
+				printf("ROT: SW press #%d -> AC %s (tx rc=%d)\n",
+				       sw, action_name, trc);
 			}
 		}
 
@@ -525,7 +657,7 @@ void app_main_task(void *arg)
 			if (!s_prov_applied && app_tcp_client_is_connected()) {
 				s_prov_applied = true;
 				app_prov_set_state(APP_PROV_STATE_APPLIED);
-				LOG_INF("TCP connected — provisioning applied");
+				LOG_INF("TCP connected - provisioning applied");
 				printf("APP: provisioning applied (TCP up)\n");
 			}
 

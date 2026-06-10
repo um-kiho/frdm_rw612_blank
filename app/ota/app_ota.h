@@ -4,8 +4,8 @@
  *
  * OTA front-end.
  *
- * Sits on top of NXP wireless-framework's OtaSupport API (RW612 SDK) and
- * exposes a small, transport-agnostic state machine:
+ * Uses Zephyr's flash image and MCUboot APIs to expose a small,
+ * transport-agnostic state machine:
  *
  *     IDLE --begin(N)--> READY --chunk(0..N-1)--> WRITING --commit(hdr)--> COMMITTED
  *       ^                  |                        |                          |
@@ -17,14 +17,8 @@
  *   - BLE (svc_ota, UUID e600) - implemented in this tree
  *   - TCP / HTTP / serial      - future, just call the same APIs
  *
- * Underlying flash layout (slot0/slot1 + partition table) lives in the SDK
- * "_boards/frdmrw612/apps/zcube/" layer and is configured via prj.conf:
- *   CONFIG_MCUX_COMPONENT_component.mflash_offchip=y      (already on)
- *   CONFIG_MCUX_COMPONENT_middleware.wireless.framework.otasupport=y
- *
- * Commit semantics: a successful app_ota_commit() flags the staged image
- * as "candidate" inside OtaSupport. The bootloader performs the
- * verification + swap on the next reset (driven by app_ota_reboot_after_ms).
+ * The secondary image slot is the MCUboot upload slot.
+ * A successful app_ota_commit() requests an upgrade and reboots the board.
  */
 
 #ifndef APP_OTA_H
