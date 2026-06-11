@@ -17,3 +17,6 @@ manifest:
           - tf-psa-crypto
           - libsbc
           - mcuboot
+          # Matter hub용 Thread: OpenThread 라이브러리 소스.
+          # 추가 후 반드시 `west update` 로 modules/lib/openthread 를 fetch.
+          - openthread

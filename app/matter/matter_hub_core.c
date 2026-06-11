@@ -9,6 +9,11 @@
 
 #include <zephyr/logging/log.h>
 
+#if defined(CONFIG_NET_L2_OPENTHREAD)
+#include <zephyr/net/openthread.h>
+#include <openthread/thread.h>
+#endif
+
 LOG_MODULE_REGISTER(app_matter_hub, LOG_LEVEL_INF);
 
 #ifndef MATTER_MAX_FABRIC_COUNT
@@ -25,6 +30,58 @@ static int persist_prefs(void)
 {
     return matter_prefs_save(&s_prefs);
 }
+
+#if defined(CONFIG_NET_L2_OPENTHREAD) && defined(CONFIG_APP_MATTER_THREAD_AUTOSTART)
+/* ── OpenThread (Thread RCP host) ──────────────────────────────────────────
+ * RW612 온칩 802.15.4 라디오를 NBU RCP 펌웨어로 구동하고, 호스트(M33)가 내부
+ * HDLC 인터페이스로 OpenThread 풀스택을 돌린다. CONFIG_OPENTHREAD_MANUAL_START
+ * 때문에 SYS_INIT 단계에서는 openthread_init()(인스턴스 생성 + RCP 기동)만 되고
+ * 네트워크는 올라오지 않는다. 여기서 openthread_run()으로 IPv6+Thread 를 기동한다
+ * (저장된 데이터셋이 있으면 재사용, 없으면 Kconfig 기본 네트워크로 form). */
+static const char *ot_role_str(otDeviceRole role)
+{
+    switch (role) {
+    case OT_DEVICE_ROLE_DISABLED: return "disabled";
+    case OT_DEVICE_ROLE_DETACHED: return "detached";
+    case OT_DEVICE_ROLE_CHILD:    return "child";
+    case OT_DEVICE_ROLE_ROUTER:   return "router";
+    case OT_DEVICE_ROLE_LEADER:   return "leader";
+    default:                      return "unknown";
+    }
+}
+
+/* OT 워크큐 컨텍스트에서 호출됨(이미 OT 뮤텍스 보유) → API 직접 호출 안전 */
+static void ot_state_changed(otChangedFlags flags, void *ctx)
+{
+    (void)ctx;
+    if ((flags & OT_CHANGED_THREAD_ROLE) != 0u) {
+        otInstance *inst = openthread_get_default_instance();
+        if (inst != NULL) {
+            LOG_INF("Thread role -> %s", ot_role_str(otThreadGetDeviceRole(inst)));
+        }
+    }
+}
+
+static struct openthread_state_changed_callback s_ot_cb = {
+    .otCallback = ot_state_changed,
+    .user_data  = NULL,
+};
+
+static void thread_start(void)
+{
+    int rc = openthread_state_changed_callback_register(&s_ot_cb);
+    if (rc != 0) {
+        LOG_WRN("OT state cb register rc=%d", rc);
+    }
+
+    rc = openthread_run();      /* IPv6 + Thread 기동 (manual-start 경로) */
+    if (rc != 0) {
+        LOG_ERR("openthread_run rc=%d — Thread netif not up", rc);
+        return;
+    }
+    LOG_INF("OpenThread started (RCP host, FTD)");
+}
+#endif /* CONFIG_NET_L2_OPENTHREAD */
 
 int matter_hub_init(void)
 {
@@ -49,6 +106,15 @@ int matter_hub_init(void)
     LOG_INF("ready VID=%u PID=%u name=%s fabric=%u state=%lu",
         (unsigned)d.vendor_id, (unsigned)d.product_id, d.friendly_name,
         (unsigned)s_prefs.fabric_count, (unsigned long)s_prefs.commissioning_state);
+
+#if defined(CONFIG_NET_L2_OPENTHREAD) && defined(CONFIG_APP_MATTER_THREAD_AUTOSTART)
+    /* Matter 백본: Thread(OpenThread RCP host) 기동. WiFi 부팅을 방해하지 않도록
+     * MANUAL_START 로 두고 여기서 명시적으로 올린다.
+     * CONFIG_APP_MATTER_THREAD_AUTOSTART=n 이면 생략 → 15.4 idle(coex 진단용). */
+    thread_start();
+#elif defined(CONFIG_NET_L2_OPENTHREAD)
+    LOG_INF("Thread autostart disabled (OT idle) — coex diagnostic");
+#endif
 
     return 0;
 }

@@ -1570,7 +1570,66 @@ curl.exe -o t.bin http://192.168.0.64:8080/firmware/zephyr.bin
 910916
 (.venv) PS C:\work\New_zCube\rw612_zephyr\frdm_rw612_blank> 
 
-OTA:http://192.168.0.64:8080/firmware/zephyr.bin --commit
+OTA:http://192.168.0.64:8080/firmware/zephyr.signed.bin --commit
 
 
-cd
+Remove-Item -Recurse -Force release
+.\build.bat build release
+
+1. 802.15.4 (Thread) 및 OpenThread 인터페이스 활성화Wi-Fi와 BLE가 도는 상태에서 Thread 
+라디오(802.15.4)를 추가로 스택에 올려야 합니다. RW612는 Tri-Radio 동시 구동을 지원하므로 
+내부 스케줄러가 알아서 시분할 처리를 하지만, 소프트웨어 인터페이스 설정이 필요합니다.
+RCP(Radio Co-processor) 아키텍처 확인: Zephyr 내에서 OpenThread 스택을 기동할 때, 
+RW612의 내부 펌웨어 서브시스템이 OpenThread RCP 역할을 하도록 매핑되어야 합니다.
+Kconfig 추가 설정: prj.conf에 기존 네트워킹 설정 외에 다음 항목들을 결합합니다.
+iniCONFIG_NET_L2_OPENTHREAD=y
+CONFIG_OPENTHREAD_BORDER_ROUTER=y
+CONFIG_OPENTHREAD_COPROCESSOR=y
+CONFIG_OPENTHREAD_COPROCESSOR_SPINEL=y # 내부 통신용 Spinel 프로토콜
+코드를 사용할 때는 주의가 필요합니다.
+/-------------------------------------------------------------------------------
+정리
+OpenThread RCP host 통합이 빌드·서명까지 성공했습니다. 적용된 4파일:
+
+west.yml — openthread fetch
+prj.conf — Thread/RCP Kconfig
+matter_hub_core.c — openthread_run() 기동 + role 로깅
+CMakeLists.txt — ftd↔radio-spinel 링크 그룹 보정 (이번에 발견·해결한 핵심)
+남은 건 플래시 후 런타임 검증뿐입니다:
+
+app_matter_hub: OpenThread started (RCP host, FTD) 로그
+Thread role -> detached → leader/router 전이 (→ 내부 HDLC RCP 실동작 증명)
+WiFi(OTA/HTTP) 정상 공존
+플래시해서 로그 나오면 붙여주세요. role 전이가 안 뜨거나 RCP 통신 에러(HDLC/spinel 타임아웃)가 나면 그 부분 이어서 보겠습니다.
+/-----------------------------------------------------------------------------
+2. Wi-Fi ↔ Thread IPv6 패킷 브릿징 (보더 라우터의 핵심)
+Matter Hub는 단순히 두 네트워크를 켜놓는 것이 아니라, 외부 Wi-Fi 망의 IPv6 패킷과 내부 Thread 
+망의 IPv6 패킷을 상호 라우팅(Bridging) 해주어야 합니다.Bi-directional 
+IPv6 Forwarding: Zephyr의 네트워크 서브시스템에서 CONFIG_NET_ROUTE=y 및 보더 라우터
+컴포넌트가 활성화되면, Wi-Fi 인터페이스와 Thread 인터페이스 간의 IPv6 패킷 포워딩이 내부적으로 
+처리됩니다.mDNS / DNS-SD 프록시: Matter 기기들은 mDNS를 통해 서로를 검색합니다. 
+Thread 기기는 대역폭이 좁아 mDNS 패킷을 직접 날리지 못하므로, RW612 Hub가 SrpServer
+(Service Registration Protocol)와 Advertising Proxy 역할을 하여 Wi-Fi 망에 Thread 기기들의 
+주소를 대신 광고해 주어야 합니다.
+
+3. BLE를 통한 Matter 커미셔닝(Commissioning) 검증스마트폰(예: 
+구글 홈, 애플 홈 앱)으로 Matter Hub나 하위 기기를 등록할 때 BLE 통신이 사용됩니다. 
+이미 검증된 BLE 스택 위에 Matter BLE 전용 프로필(CHIPoBLE)을 올려야 합니다.구글 홈 앱이나 오픈소스 
+CHIP Tool 애플리케이션을 스마트폰에 설치합니다.Hub에 전원이 켜지면 Zephyr Matter 스택이 BLE 
+Adv(Advertising) 패킷을 통해 자기를 Matter 보더 라우터 혹은 디바이스로 알리는지 확인합니다.
+BLE 연결이 완료되면 패스코드(Setup Passcode)를 주고받은 후, 최종적으로 Wi-Fi나 Thread 보안 
+자격증명(Credentials)을 주고받아 네트워크에 조인하는 플로우를 테스트합니다.
+
+4. 실제 Matter 애플리케이션 컴파일 및 플래싱스택 결합을 완료하기 위해 NXP Matter 레포지토리 또는 
+Zephyr 업스트림의 samples/net/matter/ 에 포함된 All-Clusters 애플리케이션 또는 Border Router 
+참조 예제를 타깃으로 삼아 빌드합니다.
+프로젝트 소스 구성: NXP GitHub Matter의 examples/all-clusters-app/nxp/rt/rw61x나 Zephyr 
+기반 예제를 참고하여 빌드합니다.
+메모리 맵 점검: Wi-Fi, BLE, Thread, TCP/IP, Matter 칩 스택이 한 번에 올라가면 SRAM 및 플래시 
+사용량이 급증합니다. 
+빌드 후 .map 파일을 통해 RW612의 내부 1.2MB SRAM 공간이 넘치지 않는지(특히 네트워크 버퍼 및 스택 
+사이즈 조정) 점검하십시오.기본 무선 인프라가 확보된 만큼, 이제 본격적인 소프트웨어 결합 단계입니다. 
+진행하시면서 막히는 부분이 있다면 공유해 주세요:현재 Matter 스택 소스코드로 NXP 공식 Matter 레포지토리
+(Connected Home IP) 버전을 사용 중이신가요, 아니면 Zephyr 메인 라인 소스를 직접 포팅 중이신가요?Hub 
+자체를 스마트폰 앱(구글 홈, 스마트싱스 등)에 하나의 보더 라우터 기기로 등록하는 단계까지 진입하셨나요?
+

@@ -26,6 +26,7 @@
 #include "tcp/app_tcp_client.h"
 #include "lux_task.h"
 #include "amg8833_task.h"
+#include "mlx90640_task.h"
 #include "rotary_enc.h"
 #include "ir_rx.h"
 #include "ir_decode.h"
@@ -543,11 +544,23 @@ void app_main_task(void *arg)
 	} else {
 		LOG_INF("BH1750 lux task created (I2C probe pending)");
 	}
+	/* 열화상 센서: Kconfig choice 로 택1 (AMG8833 / MLX90640 / none) */
+#if defined(CONFIG_APP_THERMAL_AMG8833)
 	if (amg_task_start(0x69, 500, NULL, NULL) != 0) {
 		LOG_WRN("amg_task_start failed");
 	} else {
 		LOG_INF("AMG8833 task created (I2C probe pending)");
 	}
+#elif defined(CONFIG_APP_THERMAL_MLX90640)
+	/* MLX90640 (0x33) 32x24 thermal - FC2 I2C (GPIO16/17), 4 Hz/sub-page */
+	if (mlx_task_start(MLX90640_ADDR_DEFAULT, MLX90640_RR_4HZ, 500, NULL, NULL) != 0) {
+		LOG_WRN("mlx_task_start failed");
+	} else {
+		LOG_INF("MLX90640 task created (I2C probe pending)");
+	}
+#else
+	LOG_INF("No thermal sensor selected (BH1750 only)");
+#endif
 #else
 	LOG_INF("Sensors disabled (CONFIG_APP_SENSORS_ENABLE not set)");
 	printf("APP: sensors disabled - enable CONFIG_APP_SENSORS_ENABLE when connected\n");
